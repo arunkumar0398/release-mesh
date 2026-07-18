@@ -1,0 +1,63 @@
+services:
+  api:
+    image: node:22-alpine
+    profiles: ["application"]
+    working_dir: /workspace
+    command: corepack pnpm --filter @releasemesh/control-plane-api dev
+    volumes:
+      - .:/workspace
+    depends_on:
+      - postgres
+      - redis
+
+  worker:
+    image: node:22-alpine
+    profiles: ["application"]
+    working_dir: /workspace
+    command: corepack pnpm --filter @releasemesh/runner-worker dev
+    volumes:
+      - .:/workspace
+      - local_artifacts:/workspace/artifacts
+    depends_on:
+      - postgres
+      - redis
+
+  pricing:
+    image: node:22-alpine
+    profiles: ["application"]
+    working_dir: /workspace
+    command: corepack pnpm --filter @releasemesh/pricing dev
+    volumes:
+      - .:/workspace
+
+  checkout:
+    image: node:22-alpine
+    profiles: ["application"]
+    working_dir: /workspace
+    command: corepack pnpm --filter @releasemesh/checkout dev
+    volumes:
+      - .:/workspace
+
+  shell:
+    image: node:22-alpine
+    profiles: ["application"]
+    working_dir: /workspace
+    command: corepack pnpm --filter @releasemesh/shell dev
+    volumes:
+      - .:/workspace
+
+  catalog-mfe:
+    image: node:22-alpine
+    profiles: ["application"]
+    working_dir: /workspace
+    command: corepack pnpm --filter @releasemesh/catalog-mfe dev
+    volumes:
+      - .:/workspace
+
+  release-mfe:
+    image: node:22-alpine
+    profiles: ["application"]
+    working_dir: /workspace
+    command: corepack pnpm --filter @releasemesh/release-mfe dev
+    volumes:
+      - .:/workspace

@@ -1,0 +1,10 @@
+{
+  "name": "@releasemesh/telemetry",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/logger.ts",
+  "scripts": {
+    "test": "node ../../node_modules/vitest/vitest.mjs run src --config ../../vitest.config.ts"
+  }
+}

@@ -1,0 +1,9 @@
+.env
+.pnpm-store
+node_modules
+coverage
+playwright-report
+test-results
+artifacts
+dist
+build
