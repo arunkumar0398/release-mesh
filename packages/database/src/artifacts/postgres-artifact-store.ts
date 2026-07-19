@@ -7,6 +7,12 @@ import type {
 
 import { ArtifactStorageKind, Prisma, PrismaClient } from "../generated/prisma/client.js";
 
+const artifactPolicies = {
+  CONTRACT_DIFF: { contentType: "application/json", maxBytes: 262_144 },
+  SANITIZED_LOG: { contentType: "text/plain", maxBytes: 65_536 },
+  SCREENSHOT: { contentType: "image/png", maxBytes: 1_048_576 }
+} as const;
+
 export class PostgresArtifactStore implements ArtifactStore {
   public constructor(private readonly prisma: PrismaClient) {}
 
@@ -18,7 +24,7 @@ export class PostgresArtifactStore implements ArtifactStore {
     }
 
     return {
-      content: artifact.jsonContent
+      content: artifact.contentType === "application/json"
         ? JSON.stringify(artifact.jsonContent)
         : artifact.textContent ?? artifact.binaryContent ?? new Uint8Array(),
       contentType: artifact.contentType,
@@ -31,6 +37,7 @@ export class PostgresArtifactStore implements ArtifactStore {
   }
 
   public async put(input: ArtifactInput): Promise<StoredArtifact> {
+    validateArtifact(input);
     const payload = toDatabasePayload(input);
     const artifact = await this.prisma.evidenceArtifact.create({
       data: {
@@ -68,9 +75,11 @@ function toDatabasePayload(input: ArtifactInput) {
   }
 
   if (input.contentType === "application/json") {
+    const jsonContent = JSON.parse(input.content);
+
     return {
       binaryContent: undefined,
-      jsonContent: JSON.parse(input.content) as Prisma.InputJsonValue,
+      jsonContent: jsonContent === null ? Prisma.JsonNull : (jsonContent as Prisma.InputJsonValue),
       sizeBytes: Buffer.byteLength(input.content),
       textContent: undefined
     };
@@ -80,6 +89,26 @@ function toDatabasePayload(input: ArtifactInput) {
     binaryContent: undefined,
     jsonContent: undefined,
     sizeBytes: Buffer.byteLength(input.content),
-    textContent: input.content
+    textContent: input.kind === "SANITIZED_LOG" ? sanitizeLog(input.content) : input.content
   };
+}
+
+function validateArtifact(input: ArtifactInput): void {
+  const policy = artifactPolicies[input.kind as keyof typeof artifactPolicies];
+
+  if (!policy || policy.contentType !== input.contentType) {
+    throw new Error("Unsupported artifact content type");
+  }
+
+  const sizeBytes = typeof input.content === "string" ? Buffer.byteLength(input.content) : input.content.byteLength;
+  if (sizeBytes > policy.maxBytes) {
+    throw new Error("Artifact exceeds the size limit");
+  }
+}
+
+function sanitizeLog(content: string): string {
+  return content
+    .replace(/(authorization\s*:\s*bearer\s+)[^\s]+/gi, "$1[REDACTED]")
+    .replace(/(database_url\s*=\s*)[^\s]+/gi, "$1[REDACTED]")
+    .replace(/(api[_-]?key\s*[=:]\s*)[^\s]+/gi, "$1[REDACTED]");
 }

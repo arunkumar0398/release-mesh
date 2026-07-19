@@ -48,6 +48,21 @@ describe("ReleaseRepository", () => {
     ]);
   });
 
+  it("returns the same release for concurrent idempotent creation", async () => {
+    const componentVersion = await createPricingVersion();
+    const input = {
+      componentVersionId: componentVersion.id,
+      correlationId: "correlation-concurrent",
+      idempotencyKey: "idem-concurrent"
+    };
+
+    const results = await Promise.all([repository.createRelease(input), repository.createRelease(input)]);
+
+    expect(results.map((result) => result.release.id)).toEqual([results[0].release.id, results[0].release.id]);
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    await expect(prisma.releaseCandidate.count({ where: { idempotencyKey: input.idempotencyKey } })).resolves.toBe(1);
+  });
+
   it("atomically guards a lifecycle transition by current status", async () => {
     const componentVersion = await createPricingVersion();
     const created = await repository.createRelease({

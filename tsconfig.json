@@ -13,6 +13,7 @@
     "services/**/*.ts",
     "services/**/*.tsx",
     "playwright.config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "vitest.integration.config.ts"
   ]
 }

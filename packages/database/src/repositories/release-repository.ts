@@ -21,35 +21,51 @@ export class ReleaseRepository {
   public constructor(private readonly prisma: PrismaClient) {}
 
   public async createRelease(input: CreateReleaseInput) {
-    return this.prisma.$transaction(async (transaction) => {
-      const existing = await transaction.releaseCandidate.findUnique({
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const existing = await transaction.releaseCandidate.findUnique({
+          where: { idempotencyKey: input.idempotencyKey }
+        });
+
+        if (existing) {
+          return { created: false, release: existing };
+        }
+
+        const release = await transaction.releaseCandidate.create({
+          data: {
+            componentVersionId: input.componentVersionId,
+            idempotencyKey: input.idempotencyKey,
+            status: DatabaseReleaseStatus.DRAFT
+          }
+        });
+
+        await transaction.releaseTransition.create({
+          data: {
+            attempt: release.attempt,
+            correlationId: input.correlationId,
+            fromStatus: null,
+            releaseId: release.id,
+            toStatus: DatabaseReleaseStatus.DRAFT
+          }
+        });
+
+        return { created: true, release };
+      }, { maxWait: 5_000 });
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
+        throw error;
+      }
+
+      const release = await this.prisma.releaseCandidate.findUnique({
         where: { idempotencyKey: input.idempotencyKey }
       });
 
-      if (existing) {
-        return { created: false, release: existing };
+      if (!release) {
+        throw error;
       }
 
-      const release = await transaction.releaseCandidate.create({
-        data: {
-          componentVersionId: input.componentVersionId,
-          idempotencyKey: input.idempotencyKey,
-          status: DatabaseReleaseStatus.DRAFT
-        }
-      });
-
-      await transaction.releaseTransition.create({
-        data: {
-          attempt: release.attempt,
-          correlationId: input.correlationId,
-          fromStatus: null,
-          releaseId: release.id,
-          toStatus: DatabaseReleaseStatus.DRAFT
-        }
-      });
-
-      return { created: true, release };
-    });
+      return { created: false, release };
+    }
   }
 
   public async retryRelease(releaseId: string, correlationId: string) {
