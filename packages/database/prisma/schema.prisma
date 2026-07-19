@@ -1,0 +1,159 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ComponentKind {
+  BACKEND
+  FIXTURE
+  FRONTEND
+}
+
+enum ReleaseStatus {
+  DRAFT
+  VALIDATING
+  QUEUED
+  TESTING
+  ANALYZING
+  SAFE
+  BLOCKED
+  ERROR
+}
+
+enum ArtifactStorageKind {
+  LOCAL
+  POSTGRES
+}
+
+model Component {
+  id                   String             @id @default(cuid())
+  name                 String             @unique
+  kind                 ComponentKind
+  ownerTeam            String
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  versions             ComponentVersion[]
+  providedContracts    Contract[]
+  consumedDependencies Dependency[]       @relation("DependencyConsumer")
+  providedDependencies Dependency[]       @relation("DependencyProvider")
+}
+
+model ComponentVersion {
+  id          String            @id @default(cuid())
+  componentId String
+  version     String
+  createdAt   DateTime          @default(now())
+  component   Component         @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  releases    ReleaseCandidate[]
+
+  @@unique([componentId, version])
+}
+
+model Dependency {
+  id                      String    @id @default(cuid())
+  consumerId              String
+  providerId              String
+  expectedContractVersion String
+  requiredEndpoints       String[]
+  owningTeam              String
+  createdAt               DateTime  @default(now())
+  consumer                Component @relation("DependencyConsumer", fields: [consumerId], references: [id], onDelete: Cascade)
+  provider                Component @relation("DependencyProvider", fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([consumerId, providerId])
+}
+
+model Contract {
+  id          String    @id @default(cuid())
+  providerId  String
+  version     String
+  endpoint    String
+  schema      Json
+  createdAt   DateTime  @default(now())
+  provider    Component @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, version, endpoint])
+}
+
+model ReleaseCandidate {
+  id                 String            @id @default(cuid())
+  componentVersionId String
+  idempotencyKey     String            @unique
+  status             ReleaseStatus     @default(DRAFT)
+  attempt            Int               @default(0)
+  version            Int               @default(0)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  componentVersion   ComponentVersion  @relation(fields: [componentVersionId], references: [id], onDelete: Restrict)
+  transitions        ReleaseTransition[]
+  testRuns           TestRun[]
+  artifacts          EvidenceArtifact[]
+  riskAssessment     RiskAssessment?
+}
+
+model ReleaseTransition {
+  id            String         @id @default(cuid())
+  releaseId     String
+  fromStatus    ReleaseStatus?
+  toStatus      ReleaseStatus
+  attempt       Int
+  reason        String?
+  errorCode     String?
+  correlationId String
+  createdAt     DateTime       @default(now())
+  release       ReleaseCandidate @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  @@index([releaseId, createdAt])
+}
+
+model TestRun {
+  id        String           @id @default(cuid())
+  releaseId String
+  testId    String
+  status    String
+  startedAt DateTime?
+  endedAt   DateTime?
+  release   ReleaseCandidate @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  artifacts EvidenceArtifact[]
+
+  @@index([releaseId])
+}
+
+model EvidenceArtifact {
+  id          String              @id @default(cuid())
+  releaseId   String
+  testRunId   String?
+  kind        String
+  contentType String
+  storageKind ArtifactStorageKind
+  jsonContent Json?
+  textContent String?
+  binaryContent Bytes?
+  localPath   String?
+  sizeBytes   Int
+  createdAt   DateTime            @default(now())
+  release     ReleaseCandidate    @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  testRun     TestRun?            @relation(fields: [testRunId], references: [id], onDelete: SetNull)
+
+  @@index([releaseId])
+}
+
+model RiskAssessment {
+  id          String           @id @default(cuid())
+  releaseId   String           @unique
+  status      String
+  assessment  Json?
+  createdAt   DateTime         @default(now())
+  release     ReleaseCandidate @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+}
+
+model WorkerHeartbeat {
+  workerId  String   @id
+  seenAt    DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

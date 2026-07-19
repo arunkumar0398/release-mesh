@@ -1,0 +1,144 @@
+import { assertTransition, type ReleaseStatus } from "@releasemesh/contracts";
+
+import { Prisma, PrismaClient, ReleaseStatus as DatabaseReleaseStatus } from "../generated/prisma/client.js";
+
+export interface CreateReleaseInput {
+  componentVersionId: string;
+  correlationId: string;
+  idempotencyKey: string;
+}
+
+export interface ReleaseTransitionInput {
+  correlationId: string;
+  errorCode?: string;
+  expectedStatus: ReleaseStatus;
+  nextStatus: ReleaseStatus;
+  reason?: string;
+  releaseId: string;
+}
+
+export class ReleaseRepository {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async createRelease(input: CreateReleaseInput) {
+    return this.prisma.$transaction(async (transaction) => {
+      const existing = await transaction.releaseCandidate.findUnique({
+        where: { idempotencyKey: input.idempotencyKey }
+      });
+
+      if (existing) {
+        return { created: false, release: existing };
+      }
+
+      const release = await transaction.releaseCandidate.create({
+        data: {
+          componentVersionId: input.componentVersionId,
+          idempotencyKey: input.idempotencyKey,
+          status: DatabaseReleaseStatus.DRAFT
+        }
+      });
+
+      await transaction.releaseTransition.create({
+        data: {
+          attempt: release.attempt,
+          correlationId: input.correlationId,
+          fromStatus: null,
+          releaseId: release.id,
+          toStatus: DatabaseReleaseStatus.DRAFT
+        }
+      });
+
+      return { created: true, release };
+    });
+  }
+
+  public async retryRelease(releaseId: string, correlationId: string) {
+    return this.prisma.$transaction(async (transaction) => {
+      const release = await transaction.releaseCandidate.findUnique({ where: { id: releaseId } });
+
+      if (!release) {
+        throw new Error(`Release not found: ${releaseId}`);
+      }
+
+      if (release.status !== DatabaseReleaseStatus.ERROR) {
+        throw new Error("Only ERROR releases can be retried");
+      }
+
+      const nextAttempt = release.attempt + 1;
+      const update = await transaction.releaseCandidate.updateMany({
+        data: {
+          attempt: nextAttempt,
+          status: DatabaseReleaseStatus.QUEUED,
+          version: { increment: 1 }
+        },
+        where: {
+          id: releaseId,
+          status: DatabaseReleaseStatus.ERROR,
+          version: release.version
+        }
+      });
+
+      if (update.count !== 1) {
+        throw new Error("Release status changed before retry could be applied");
+      }
+
+      await transaction.releaseTransition.create({
+        data: {
+          attempt: nextAttempt,
+          correlationId,
+          fromStatus: DatabaseReleaseStatus.ERROR,
+          releaseId,
+          toStatus: DatabaseReleaseStatus.QUEUED
+        }
+      });
+
+      return transaction.releaseCandidate.findUniqueOrThrow({ where: { id: releaseId } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  public async transitionRelease(input: ReleaseTransitionInput) {
+    return this.prisma.$transaction(async (transaction) => {
+      const release = await transaction.releaseCandidate.findUnique({ where: { id: input.releaseId } });
+
+      if (!release) {
+        throw new Error(`Release not found: ${input.releaseId}`);
+      }
+
+      if (release.status !== input.expectedStatus) {
+        throw new Error("Release status changed before transition could be applied");
+      }
+
+      assertTransition(input.expectedStatus, input.nextStatus);
+
+      const update = await transaction.releaseCandidate.updateMany({
+        data: {
+          status: input.nextStatus as DatabaseReleaseStatus,
+          version: { increment: 1 }
+        },
+        where: {
+          id: input.releaseId,
+          status: input.expectedStatus as DatabaseReleaseStatus,
+          version: release.version
+        }
+      });
+
+      if (update.count !== 1) {
+        throw new Error("Release status changed before transition could be applied");
+      }
+
+      await transaction.releaseTransition.create({
+        data: {
+          attempt: release.attempt,
+          correlationId: input.correlationId,
+          errorCode: input.errorCode,
+          fromStatus: input.expectedStatus as DatabaseReleaseStatus,
+          reason: input.reason,
+          releaseId: input.releaseId,
+          toStatus: input.nextStatus as DatabaseReleaseStatus
+        }
+      });
+
+      return transaction.releaseCandidate.findUniqueOrThrow({ where: { id: input.releaseId } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+}

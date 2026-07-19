@@ -3,9 +3,10 @@ services:
     image: node:22-alpine
     profiles: ["application"]
     working_dir: /workspace
-    command: corepack pnpm --filter @releasemesh/control-plane-api dev
+    command: sh -c "corepack pnpm install --frozen-lockfile && exec tail -f /dev/null"
     volumes:
       - .:/workspace
+      - api_node_modules:/workspace/node_modules
     depends_on:
       - postgres
       - redis
@@ -14,9 +15,10 @@ services:
     image: node:22-alpine
     profiles: ["application"]
     working_dir: /workspace
-    command: corepack pnpm --filter @releasemesh/runner-worker dev
+    command: sh -c "corepack pnpm install --frozen-lockfile && exec tail -f /dev/null"
     volumes:
       - .:/workspace
+      - worker_node_modules:/workspace/node_modules
       - local_artifacts:/workspace/artifacts
     depends_on:
       - postgres
@@ -26,38 +28,43 @@ services:
     image: node:22-alpine
     profiles: ["application"]
     working_dir: /workspace
-    command: corepack pnpm --filter @releasemesh/pricing dev
+    command: sh -c "corepack pnpm install --frozen-lockfile && exec tail -f /dev/null"
     volumes:
       - .:/workspace
+      - pricing_node_modules:/workspace/node_modules
 
   checkout:
     image: node:22-alpine
     profiles: ["application"]
     working_dir: /workspace
-    command: corepack pnpm --filter @releasemesh/checkout dev
+    command: sh -c "corepack pnpm install --frozen-lockfile && exec tail -f /dev/null"
     volumes:
       - .:/workspace
+      - checkout_node_modules:/workspace/node_modules
 
   shell:
     image: node:22-alpine
     profiles: ["application"]
     working_dir: /workspace
-    command: corepack pnpm --filter @releasemesh/shell dev
+    command: sh -c "corepack pnpm install --frozen-lockfile && exec tail -f /dev/null"
     volumes:
       - .:/workspace
+      - shell_node_modules:/workspace/node_modules
 
   catalog-mfe:
     image: node:22-alpine
     profiles: ["application"]
     working_dir: /workspace
-    command: corepack pnpm --filter @releasemesh/catalog-mfe dev
+    command: sh -c "corepack pnpm install --frozen-lockfile && exec tail -f /dev/null"
     volumes:
       - .:/workspace
+      - catalog_mfe_node_modules:/workspace/node_modules
 
   release-mfe:
     image: node:22-alpine
     profiles: ["application"]
     working_dir: /workspace
-    command: corepack pnpm --filter @releasemesh/release-mfe dev
+    command: sh -c "corepack pnpm install --frozen-lockfile && exec tail -f /dev/null"
     volumes:
       - .:/workspace
+      - release_mfe_node_modules:/workspace/node_modules

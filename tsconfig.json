@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "fixtures/**/*.ts",
+    "fixtures/**/*.tsx",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "services/**/*.ts",
+    "services/**/*.tsx",
+    "playwright.config.ts",
+    "vitest.config.ts"
+  ]
+}

@@ -11,10 +11,11 @@
     "build": "pnpm -r --if-present build",
     "dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build",
     "lint": "eslint .",
-    "test": "pnpm test:unit && pnpm test:integration && pnpm test:e2e",
+    "test": "pnpm typecheck && pnpm test:unit && pnpm test:integration && pnpm test:e2e",
     "test:e2e": "playwright test",
-    "test:integration": "vitest run tests/integration",
-    "test:unit": "vitest run"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:unit": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

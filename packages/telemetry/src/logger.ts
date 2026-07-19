@@ -24,10 +24,10 @@ export function createLogger(write: LogWriter = writeToConsole): ReleaseMeshLogg
   return {
     info(message, context = {}) {
       write({
+        ...context,
         level: "info",
         message,
-        timestamp: new Date().toISOString(),
-        ...context
+        timestamp: new Date().toISOString()
       });
     }
   };

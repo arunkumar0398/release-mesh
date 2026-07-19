@@ -1,9 +1,12 @@
 .env
 .pnpm-store
 node_modules
+packages/database/src/generated
 coverage
 playwright-report
 test-results
 artifacts
+!packages/database/src/artifacts/
+!packages/database/src/artifacts/**
 dist
 build
