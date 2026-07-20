@@ -1,12 +1,32 @@
 export type ArtifactContent = string | Uint8Array;
 
-export interface ArtifactInput {
-  content: ArtifactContent;
-  contentType: string;
-  kind: string;
+interface ArtifactInputBase {
   releaseId: string;
   testRunId?: string;
 }
+
+export interface ContractDiffArtifactInput extends ArtifactInputBase {
+  content: string;
+  contentType: "application/json";
+  kind: "CONTRACT_DIFF";
+}
+
+export interface SanitizedLogArtifactInput extends ArtifactInputBase {
+  content: string;
+  contentType: "text/plain";
+  kind: "SANITIZED_LOG";
+}
+
+export interface ScreenshotArtifactInput extends ArtifactInputBase {
+  content: Uint8Array;
+  contentType: "image/png";
+  kind: "SCREENSHOT";
+}
+
+export type ArtifactInput =
+  | ContractDiffArtifactInput
+  | SanitizedLogArtifactInput
+  | ScreenshotArtifactInput;
 
 export interface StoredArtifact {
   contentType: string;

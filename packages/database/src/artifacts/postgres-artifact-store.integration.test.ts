@@ -66,8 +66,32 @@ describe("PostgresArtifactStore", () => {
     });
 
     await expect(store.get(stored.id)).resolves.toMatchObject({
-      content: "Authorization: Bearer [REDACTED]\nDATABASE_URL=[REDACTED]"
+      content: "Authorization: [REDACTED]\nDATABASE_URL=[REDACTED]"
     });
+  });
+
+  it("redacts authorization schemes and secret key-value formats before persisting logs", async () => {
+    const release = await createRelease();
+    const stored = await store.put({
+      content: [
+        "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+        '{"apiKey":"api-secret","password":"db-password","token":"token-secret","secret":"shared-secret"}',
+        "DATABASE_URL: postgres://user:password@host/database"
+      ].join("\n"),
+      contentType: "text/plain",
+      kind: "SANITIZED_LOG",
+      releaseId: release.id
+    });
+    const artifact = await store.get(stored.id);
+
+    expect(artifact?.content).toBe(
+      [
+        "Authorization: [REDACTED]",
+        '{"apiKey":"[REDACTED]","password":"[REDACTED]","token":"[REDACTED]","secret":"[REDACTED]"}',
+        "DATABASE_URL: [REDACTED]"
+      ].join("\n")
+    );
+    expect(stored.sizeBytes).toBe(Buffer.byteLength(artifact?.content as string));
   });
 
   it("round-trips a small PNG screenshot", async () => {
@@ -92,7 +116,7 @@ describe("PostgresArtifactStore", () => {
         contentType: "text/html",
         kind: "SANITIZED_LOG",
         releaseId: release.id
-      })
+      } as unknown as Parameters<typeof store.put>[0])
     ).rejects.toThrow("Unsupported artifact content type");
 
     await expect(
@@ -103,6 +127,37 @@ describe("PostgresArtifactStore", () => {
         releaseId: release.id
       })
     ).rejects.toThrow("Artifact exceeds the size limit");
+  });
+
+  it("rejects artifact content representations that could bypass storage policy", async () => {
+    const release = await createRelease();
+
+    await expect(
+      store.put({
+        content: new Uint8Array([1]),
+        contentType: "text/plain",
+        kind: "SANITIZED_LOG",
+        releaseId: release.id
+      } as unknown as Parameters<typeof store.put>[0])
+    ).rejects.toThrow("Unsupported artifact content representation");
+
+    await expect(
+      store.put({
+        content: new Uint8Array([1]),
+        contentType: "application/json",
+        kind: "CONTRACT_DIFF",
+        releaseId: release.id
+      } as unknown as Parameters<typeof store.put>[0])
+    ).rejects.toThrow("Unsupported artifact content representation");
+
+    await expect(
+      store.put({
+        content: "not image bytes",
+        contentType: "image/png",
+        kind: "SCREENSHOT",
+        releaseId: release.id
+      } as unknown as Parameters<typeof store.put>[0])
+    ).rejects.toThrow("Unsupported artifact content representation");
   });
 });
 

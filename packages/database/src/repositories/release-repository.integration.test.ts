@@ -56,11 +56,27 @@ describe("ReleaseRepository", () => {
       idempotencyKey: "idem-concurrent"
     };
 
-    const results = await Promise.all([repository.createRelease(input), repository.createRelease(input)]);
+    const firstPrisma = new PrismaClient();
+    const secondPrisma = new PrismaClient();
+    const barrier = createBarrier(2);
+    const firstRepository = new ReleaseRepository(withCreateBarrier(firstPrisma, barrier) as PrismaClient);
+    const secondRepository = new ReleaseRepository(withCreateBarrier(secondPrisma, barrier) as PrismaClient);
+
+    await Promise.all([firstPrisma.$connect(), secondPrisma.$connect()]);
+    const results = await Promise.all([firstRepository.createRelease(input), secondRepository.createRelease(input)]);
+    await Promise.all([firstPrisma.$disconnect(), secondPrisma.$disconnect()]);
 
     expect(results.map((result) => result.release.id)).toEqual([results[0].release.id, results[0].release.id]);
     expect(results.filter((result) => result.created)).toHaveLength(1);
     await expect(prisma.releaseCandidate.count({ where: { idempotencyKey: input.idempotencyKey } })).resolves.toBe(1);
+    await expect(prisma.releaseTransition.findMany({ where: { releaseId: results[0].release.id } })).resolves.toEqual([
+      expect.objectContaining({
+        attempt: 0,
+        correlationId: input.correlationId,
+        fromStatus: null,
+        toStatus: "DRAFT"
+      })
+    ]);
   });
 
   it("atomically guards a lifecycle transition by current status", async () => {
@@ -150,6 +166,36 @@ async function createPricingVersion() {
     data: {
       componentId: component.id,
       version: "1.0.0"
+    }
+  });
+}
+
+function createBarrier(participants: number) {
+  let arrived = 0;
+  let release: () => void;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  return async () => {
+    arrived += 1;
+    if (arrived === participants) {
+      release();
+    }
+
+    await ready;
+  };
+}
+
+function withCreateBarrier(prismaClient: PrismaClient, waitForAllCreates: () => Promise<void>) {
+  return prismaClient.$extends({
+    query: {
+      releaseCandidate: {
+        async create({ args, query }) {
+          await waitForAllCreates();
+          return query(args);
+        }
+      }
     }
   });
 }

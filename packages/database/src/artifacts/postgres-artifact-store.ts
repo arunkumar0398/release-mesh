@@ -8,9 +8,9 @@ import type {
 import { ArtifactStorageKind, Prisma, PrismaClient } from "../generated/prisma/client.js";
 
 const artifactPolicies = {
-  CONTRACT_DIFF: { contentType: "application/json", maxBytes: 262_144 },
-  SANITIZED_LOG: { contentType: "text/plain", maxBytes: 65_536 },
-  SCREENSHOT: { contentType: "image/png", maxBytes: 1_048_576 }
+  CONTRACT_DIFF: { contentType: "application/json", maxBytes: 262_144, representation: "string" },
+  SANITIZED_LOG: { contentType: "text/plain", maxBytes: 65_536, representation: "string" },
+  SCREENSHOT: { contentType: "image/png", maxBytes: 1_048_576, representation: "binary" }
 } as const;
 
 export class PostgresArtifactStore implements ArtifactStore {
@@ -88,8 +88,8 @@ function toDatabasePayload(input: ArtifactInput) {
   return {
     binaryContent: undefined,
     jsonContent: undefined,
-    sizeBytes: Buffer.byteLength(input.content),
-    textContent: input.kind === "SANITIZED_LOG" ? sanitizeLog(input.content) : input.content
+    sizeBytes: Buffer.byteLength(sanitizeLog(input.content)),
+    textContent: sanitizeLog(input.content)
   };
 }
 
@@ -100,6 +100,13 @@ function validateArtifact(input: ArtifactInput): void {
     throw new Error("Unsupported artifact content type");
   }
 
+  const hasExpectedRepresentation =
+    (policy.representation === "string" && typeof input.content === "string") ||
+    (policy.representation === "binary" && input.content instanceof Uint8Array);
+  if (!hasExpectedRepresentation) {
+    throw new Error("Unsupported artifact content representation");
+  }
+
   const sizeBytes = typeof input.content === "string" ? Buffer.byteLength(input.content) : input.content.byteLength;
   if (sizeBytes > policy.maxBytes) {
     throw new Error("Artifact exceeds the size limit");
@@ -108,7 +115,13 @@ function validateArtifact(input: ArtifactInput): void {
 
 function sanitizeLog(content: string): string {
   return content
-    .replace(/(authorization\s*:\s*bearer\s+)[^\s]+/gi, "$1[REDACTED]")
-    .replace(/(database_url\s*=\s*)[^\s]+/gi, "$1[REDACTED]")
-    .replace(/(api[_-]?key\s*[=:]\s*)[^\s]+/gi, "$1[REDACTED]");
+    .replace(/(^\s*authorization\s*:\s*)[^\r\n]*/gim, "$1[REDACTED]")
+    .replace(
+      /((?:["']?(?:api[_-]?key|password|token|secret|database_url|databaseurl)["']?\s*[:=]\s*)["'])[^"'\r\n]*(["'])/gi,
+      "$1[REDACTED]$2"
+    )
+    .replace(
+      /(["']?(?:api[_-]?key|password|token|secret|database_url|databaseurl)["']?\s*[:=]\s*)(?!["'])[^,\s}\r\n]+/gi,
+      "$1[REDACTED]"
+    );
 }
