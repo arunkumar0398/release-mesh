@@ -45,9 +45,9 @@ export function App({
   return (
     <main>
       <h1>Checkout</h1>
-      {state.status === "loading" ? <p>Loading pricing…</p> : null}
+      {state.status === "loading" ? <p role="status">Loading pricing…</p> : null}
       {state.status === "ready" ? (
-        <section aria-label="Checkout pricing">
+        <section aria-label="Checkout pricing" role="status">
           <p>Pricing available</p>
           <strong>{`${state.quote.currency} ${state.quote.price}`}</strong>
         </section>

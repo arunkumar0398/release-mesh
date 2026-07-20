@@ -30,9 +30,20 @@ async function startPricing(mode: "v2" | "v2.1"): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
+function createTrustedPricingApiCheck(
+  options: Omit<Parameters<typeof createPricingApiCheck>[0], "trustedPricingOrigins"> & {
+    trustedPricingOrigins?: readonly string[];
+  }
+) {
+  return createPricingApiCheck({
+    trustedPricingOrigins: options.trustedPricingOrigins ?? [new URL(options.pricingBaseUrl).origin],
+    ...options
+  });
+}
+
 describe("createPricingApiCheck", () => {
   it("fails against Pricing v2 when the Checkout fields are absent", async () => {
-    const runCheck = createPricingApiCheck({ pricingBaseUrl: await startPricing("v2") });
+    const runCheck = createTrustedPricingApiCheck({ pricingBaseUrl: await startPricing("v2") });
 
     await expect(runCheck()).resolves.toEqual({
       missingFields: ["price", "currency"],
@@ -43,7 +54,7 @@ describe("createPricingApiCheck", () => {
   });
 
   it("passes against Pricing v2.1", async () => {
-    const runCheck = createPricingApiCheck({ pricingBaseUrl: await startPricing("v2.1") });
+    const runCheck = createTrustedPricingApiCheck({ pricingBaseUrl: await startPricing("v2.1") });
 
     await expect(runCheck()).resolves.toEqual({
       missingFields: [],
@@ -55,7 +66,7 @@ describe("createPricingApiCheck", () => {
 
   it("returns an error when Pricing returns a non-success status", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
-    const runCheck = createPricingApiCheck({ fetchImpl, pricingBaseUrl: "http://pricing.test" });
+    const runCheck = createTrustedPricingApiCheck({ fetchImpl, pricingBaseUrl: "http://pricing.test" });
 
     await expect(runCheck()).resolves.toEqual({
       errorCode: "HTTP_ERROR",
@@ -72,7 +83,7 @@ describe("createPricingApiCheck", () => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
       });
     });
-    const runCheck = createPricingApiCheck({
+    const runCheck = createTrustedPricingApiCheck({
       fetchImpl,
       pricingBaseUrl: "http://pricing.test",
       timeoutMs: 50
@@ -89,7 +100,7 @@ describe("createPricingApiCheck", () => {
     });
     expect(fetchImpl).toHaveBeenCalledWith(
       "http://pricing.test/pricing/checkout-demo",
-      expect.objectContaining({ signal: expect.any(AbortSignal) })
+      expect.objectContaining({ redirect: "error", signal: expect.any(AbortSignal) })
     );
   });
 
@@ -101,7 +112,7 @@ describe("createPricingApiCheck", () => {
       status: 200
     } as Response;
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response);
-    const runCheck = createPricingApiCheck({
+    const runCheck = createTrustedPricingApiCheck({
       fetchImpl,
       pricingBaseUrl: "http://pricing.test",
       timeoutMs: 50
@@ -120,7 +131,7 @@ describe("createPricingApiCheck", () => {
 
   it("returns an error when the Pricing network request rejects", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new TypeError("fetch failed"));
-    const runCheck = createPricingApiCheck({ fetchImpl, pricingBaseUrl: "http://pricing.test" });
+    const runCheck = createTrustedPricingApiCheck({ fetchImpl, pricingBaseUrl: "http://pricing.test" });
 
     await expect(runCheck()).resolves.toEqual({
       errorCode: "NETWORK_ERROR",
@@ -134,7 +145,7 @@ describe("createPricingApiCheck", () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValue(new Response("not-json", { status: 200 }));
-    const runCheck = createPricingApiCheck({ fetchImpl, pricingBaseUrl: "http://pricing.test" });
+    const runCheck = createTrustedPricingApiCheck({ fetchImpl, pricingBaseUrl: "http://pricing.test" });
 
     await expect(runCheck()).resolves.toEqual({
       errorCode: "INVALID_JSON",
@@ -156,6 +167,7 @@ describe("createPricingApiCheck", () => {
     expect(
       decideReleaseGate({
         evidenceComplete: true,
+        expectedMandatoryTestIds: ["api-pricing"],
         hasIncompatibleRegisteredDependency: false,
         mandatoryTests: [],
         requiredChecksCompleted: gateState.requiredChecksCompleted
@@ -175,5 +187,28 @@ describe("createPricingApiCheck", () => {
         testId: "api-pricing"
       })
     ).toEqual({ mandatoryTestStatus, requiredChecksCompleted: true });
+  });
+
+  it.each([
+    ["origin", "http://169.254.169.254", ["http://pricing.test"]],
+    ["credentials", "http://user:password@pricing.test", ["http://pricing.test"]],
+    ["path", "http://pricing.test/internal", ["http://pricing.test"]]
+  ])("rejects an untrusted Pricing %s", (_scenario, pricingBaseUrl, trustedPricingOrigins) => {
+    expect(() => createPricingApiCheck({ pricingBaseUrl, trustedPricingOrigins })).toThrow(
+      "Untrusted Pricing URL"
+    );
+  });
+
+  it("disables redirects for the trusted Pricing request", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { headers: { location: "http://untrusted.test" }, status: 302 }));
+    const runCheck = createTrustedPricingApiCheck({ fetchImpl, pricingBaseUrl: "https://pricing.test" });
+
+    await expect(runCheck()).resolves.toMatchObject({ errorCode: "HTTP_ERROR", outcome: "error" });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://pricing.test/pricing/checkout-demo",
+      expect.objectContaining({ redirect: "error" })
+    );
   });
 });
