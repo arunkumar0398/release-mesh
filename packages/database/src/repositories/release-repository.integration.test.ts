@@ -150,6 +150,15 @@ describe("ReleaseRepository", () => {
         releaseId: created.release.id
       })
     ).resolves.toMatchObject({ status: "SAFE" });
+    await expect(prisma.releaseTransition.findMany({ where: { releaseId: created.release.id }, orderBy: { createdAt: "asc" } })).resolves.toEqual([
+      expect.objectContaining({ attempt: 0, fromStatus: null, toStatus: "DRAFT" }),
+      expect.objectContaining({ attempt: 0, fromStatus: "DRAFT", toStatus: "VALIDATING" }),
+      expect.objectContaining({ attempt: 0, fromStatus: "VALIDATING", toStatus: "ERROR" }),
+      expect.objectContaining({ attempt: 1, fromStatus: "ERROR", toStatus: "QUEUED" }),
+      expect.objectContaining({ attempt: 1, fromStatus: "QUEUED", toStatus: "TESTING" }),
+      expect.objectContaining({ attempt: 1, fromStatus: "TESTING", toStatus: "ANALYZING" }),
+      expect.objectContaining({ attempt: 1, fromStatus: "ANALYZING", toStatus: "SAFE" })
+    ]);
   });
 });
 

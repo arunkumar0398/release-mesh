@@ -94,6 +94,20 @@ describe("PostgresArtifactStore", () => {
     expect(stored.sizeBytes).toBe(Buffer.byteLength(artifact?.content as string));
   });
 
+  it("redacts JSON-formatted and equals-style authorization values", async () => {
+    const release = await createRelease();
+    const stored = await store.put({
+      content: '{"authorization":"Bearer json-secret"}\nAuthorization=Basic encoded-secret',
+      contentType: "text/plain",
+      kind: "SANITIZED_LOG",
+      releaseId: release.id
+    });
+
+    await expect(store.get(stored.id)).resolves.toMatchObject({
+      content: '{"authorization":[REDACTED]}\nAuthorization=[REDACTED]'
+    });
+  });
+
   it("round-trips a small PNG screenshot", async () => {
     const release = await createRelease();
     const content = new Uint8Array([137, 80, 78, 71]);
@@ -159,17 +173,35 @@ describe("PostgresArtifactStore", () => {
       } as unknown as Parameters<typeof store.put>[0])
     ).rejects.toThrow("Unsupported artifact content representation");
   });
+
+  it("rejects an artifact test run owned by a different release", async () => {
+    const firstRelease = await createRelease();
+    const secondRelease = await createRelease("pricing-artifact-second", "artifact-store-release-second");
+    const testRun = await prisma.testRun.create({
+      data: { releaseId: firstRelease.id, status: "PASSED", testId: "contract-check" }
+    });
+
+    await expect(
+      store.put({
+        content: JSON.stringify({ compatible: true }),
+        contentType: "application/json",
+        kind: "CONTRACT_DIFF",
+        releaseId: secondRelease.id,
+        testRunId: testRun.id
+      })
+    ).rejects.toThrow("Test run does not belong to the release");
+  });
 });
 
-async function createRelease() {
+async function createRelease(componentName = "pricing-artifact", idempotencyKey = "artifact-store-release") {
   const component = await prisma.component.create({
-    data: { kind: "FIXTURE", name: "pricing-artifact", ownerTeam: "checkout-platform" }
+    data: { kind: "FIXTURE", name: componentName, ownerTeam: "checkout-platform" }
   });
   const version = await prisma.componentVersion.create({
     data: { componentId: component.id, version: "1.0.0" }
   });
 
   return prisma.releaseCandidate.create({
-    data: { componentVersionId: version.id, idempotencyKey: "artifact-store-release" }
+    data: { componentVersionId: version.id, idempotencyKey }
   });
 }

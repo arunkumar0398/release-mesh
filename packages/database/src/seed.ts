@@ -52,8 +52,9 @@ export async function seedCatalog(prisma: PrismaClient): Promise<void> {
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const prisma = new PrismaClient();
   await seedCatalog(prisma);
   await prisma.$disconnect();
 }
+import { pathToFileURL } from "node:url";

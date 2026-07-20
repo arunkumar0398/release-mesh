@@ -119,9 +119,10 @@ model TestRun {
   startedAt DateTime?
   endedAt   DateTime?
   release   ReleaseCandidate @relation(fields: [releaseId], references: [id], onDelete: Cascade)
-  artifacts EvidenceArtifact[]
+  artifacts EvidenceArtifact[] @relation("ArtifactTestRun")
 
   @@index([releaseId])
+  @@unique([id, releaseId])
 }
 
 model EvidenceArtifact {
@@ -138,7 +139,7 @@ model EvidenceArtifact {
   sizeBytes   Int
   createdAt   DateTime            @default(now())
   release     ReleaseCandidate    @relation(fields: [releaseId], references: [id], onDelete: Cascade)
-  testRun     TestRun?            @relation(fields: [testRunId], references: [id], onDelete: SetNull)
+  testRun     TestRun?            @relation("ArtifactTestRun", fields: [testRunId, releaseId], references: [id, releaseId], onDelete: Restrict)
 
   @@index([releaseId])
 }

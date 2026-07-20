@@ -12,8 +12,8 @@
     "dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build",
     "generate:prisma": "corepack pnpm --filter @releasemesh/database generate",
     "lint": "eslint .",
-    "test": "corepack pnpm typecheck && corepack pnpm test:unit && corepack pnpm test:integration && corepack pnpm test:e2e",
-    "test:e2e": "playwright test",
+    "test": "corepack pnpm typecheck && corepack pnpm test:unit && corepack pnpm test:integration",
+    "test:e2e": "corepack pnpm generate:prisma && playwright test",
     "test:integration": "corepack pnpm generate:prisma && vitest run --config vitest.integration.config.ts",
     "test:unit": "corepack pnpm generate:prisma && vitest run",
     "typecheck": "corepack pnpm generate:prisma && tsc --noEmit"

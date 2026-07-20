@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { dirname, resolve } from "node:path";
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "./generated/prisma/client.js";
@@ -40,4 +44,29 @@ describe("seedCatalog", () => {
       })
     ]);
   });
+
+  it("executes the package seed CLI on Windows-compatible file paths", async () => {
+    const useWindowsShell = process.platform === "win32";
+    const executable = useWindowsShell
+      ? `"${resolve(dirname(process.execPath), "corepack.cmd")}" pnpm --filter @releasemesh/database seed`
+      : "corepack";
+    const child = spawn(
+      executable,
+      useWindowsShell ? [] : ["pnpm", "--filter", "@releasemesh/database", "seed"],
+      {
+        cwd: resolve(import.meta.dirname, "..", "..", ".."),
+        env: process.env,
+        shell: useWindowsShell,
+        stdio: "pipe"
+      }
+    );
+    const stderr: Buffer[] = [];
+    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    const [exitCode] = (await once(child, "exit")) as [number];
+
+    expect(exitCode, Buffer.concat(stderr).toString("utf8")).toBe(0);
+    await expect(catalog.listComponents()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "checkout" }), expect.objectContaining({ name: "pricing" })])
+    );
+  }, 30_000);
 });

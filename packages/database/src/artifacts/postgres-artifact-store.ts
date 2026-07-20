@@ -6,12 +6,7 @@ import type {
 } from "@releasemesh/contracts";
 
 import { ArtifactStorageKind, Prisma, PrismaClient } from "../generated/prisma/client.js";
-
-const artifactPolicies = {
-  CONTRACT_DIFF: { contentType: "application/json", maxBytes: 262_144, representation: "string" },
-  SANITIZED_LOG: { contentType: "text/plain", maxBytes: 65_536, representation: "string" },
-  SCREENSHOT: { contentType: "image/png", maxBytes: 1_048_576, representation: "binary" }
-} as const;
+import { normalizeArtifact } from "./artifact-policy.js";
 
 export class PostgresArtifactStore implements ArtifactStore {
   public constructor(private readonly prisma: PrismaClient) {}
@@ -37,8 +32,16 @@ export class PostgresArtifactStore implements ArtifactStore {
   }
 
   public async put(input: ArtifactInput): Promise<StoredArtifact> {
-    validateArtifact(input);
-    const payload = toDatabasePayload(input);
+    const normalized = normalizeArtifact(input);
+    if (input.testRunId) {
+      const testRun = await this.prisma.testRun.findFirst({
+        where: { id: input.testRunId, releaseId: input.releaseId }
+      });
+      if (!testRun) {
+        throw new Error("Test run does not belong to the release");
+      }
+    }
+    const payload = toDatabasePayload(input, normalized);
     const artifact = await this.prisma.evidenceArtifact.create({
       data: {
         binaryContent: payload.binaryContent,
@@ -64,23 +67,23 @@ export class PostgresArtifactStore implements ArtifactStore {
   }
 }
 
-function toDatabasePayload(input: ArtifactInput) {
-  if (typeof input.content !== "string") {
+function toDatabasePayload(input: ArtifactInput, normalized: ReturnType<typeof normalizeArtifact>) {
+  if (typeof normalized.content !== "string") {
     return {
-      binaryContent: Uint8Array.from(input.content),
+      binaryContent: Uint8Array.from(normalized.content),
       jsonContent: undefined,
-      sizeBytes: input.content.byteLength,
+      sizeBytes: normalized.sizeBytes,
       textContent: undefined
     };
   }
 
   if (input.contentType === "application/json") {
-    const jsonContent = JSON.parse(input.content);
+    const jsonContent = JSON.parse(normalized.content);
 
     return {
       binaryContent: undefined,
       jsonContent: jsonContent === null ? Prisma.JsonNull : (jsonContent as Prisma.InputJsonValue),
-      sizeBytes: Buffer.byteLength(input.content),
+      sizeBytes: normalized.sizeBytes,
       textContent: undefined
     };
   }
@@ -88,40 +91,7 @@ function toDatabasePayload(input: ArtifactInput) {
   return {
     binaryContent: undefined,
     jsonContent: undefined,
-    sizeBytes: Buffer.byteLength(sanitizeLog(input.content)),
-    textContent: sanitizeLog(input.content)
+    sizeBytes: normalized.sizeBytes,
+    textContent: normalized.content
   };
-}
-
-function validateArtifact(input: ArtifactInput): void {
-  const policy = artifactPolicies[input.kind as keyof typeof artifactPolicies];
-
-  if (!policy || policy.contentType !== input.contentType) {
-    throw new Error("Unsupported artifact content type");
-  }
-
-  const hasExpectedRepresentation =
-    (policy.representation === "string" && typeof input.content === "string") ||
-    (policy.representation === "binary" && input.content instanceof Uint8Array);
-  if (!hasExpectedRepresentation) {
-    throw new Error("Unsupported artifact content representation");
-  }
-
-  const sizeBytes = typeof input.content === "string" ? Buffer.byteLength(input.content) : input.content.byteLength;
-  if (sizeBytes > policy.maxBytes) {
-    throw new Error("Artifact exceeds the size limit");
-  }
-}
-
-function sanitizeLog(content: string): string {
-  return content
-    .replace(/(^\s*authorization\s*:\s*)[^\r\n]*/gim, "$1[REDACTED]")
-    .replace(
-      /((?:["']?(?:api[_-]?key|password|token|secret|database_url|databaseurl)["']?\s*[:=]\s*)["'])[^"'\r\n]*(["'])/gi,
-      "$1[REDACTED]$2"
-    )
-    .replace(
-      /(["']?(?:api[_-]?key|password|token|secret|database_url|databaseurl)["']?\s*[:=]\s*)(?!["'])[^,\s}\r\n]+/gi,
-      "$1[REDACTED]"
-    );
 }

@@ -7,7 +7,7 @@
   "scripts": {
     "generate": "prisma generate --schema prisma/schema.prisma",
     "migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
-    "preseed": "prisma generate --schema prisma/schema.prisma",
+    "preseed": "node scripts/ensure-prisma-client.mjs",
     "seed": "tsx src/seed.ts",
     "test": "node ../../node_modules/vitest/vitest.mjs run src --config ../../vitest.config.ts"
   },
