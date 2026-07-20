@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import { stat } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
 
@@ -31,8 +32,11 @@ test("Pricing v2 captures the broken Checkout experience", async ({ page }, test
   await expect(page.getByRole("alert")).toContainText(
     "Pricing response is incompatible: missing price, currency"
   );
+  const screenshotPath = testInfo.outputPath("checkout-v2-blocked.png");
+  await page.screenshot({ fullPage: true, path: screenshotPath });
+  expect((await stat(screenshotPath)).size).toBeGreaterThan(0);
   await testInfo.attach("checkout-v2-blocked", {
-    body: await page.screenshot({ fullPage: true }),
+    path: screenshotPath,
     contentType: "image/png"
   });
 });
