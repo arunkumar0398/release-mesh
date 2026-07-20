@@ -2,5 +2,21 @@
   "name": "@releasemesh/database",
   "version": "0.1.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "generate": "prisma generate --schema prisma/schema.prisma",
+    "migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "preseed": "node scripts/ensure-prisma-client.mjs",
+    "seed": "tsx src/seed.ts",
+    "test": "node ../../node_modules/vitest/vitest.mjs run src --config ../../vitest.config.ts"
+  },
+  "dependencies": {
+    "@releasemesh/contracts": "workspace:*",
+    "@prisma/client": "^6.16.3"
+  },
+  "devDependencies": {
+    "prisma": "^6.16.3",
+    "tsx": "^4.20.3"
+  }
 }

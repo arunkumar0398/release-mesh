@@ -21,4 +21,19 @@ describe("loadEnvironment", () => {
       "DATABASE_URL is required"
     );
   });
+
+  it("rejects a missing Redis URL", () => {
+    expect(() => loadEnvironment({ DATABASE_URL: "postgresql://localhost/releasemesh" })).toThrow(
+      "REDIS_URL is required"
+    );
+  });
+
+  it("rejects whitespace-only required values", () => {
+    expect(() =>
+      loadEnvironment({
+        DATABASE_URL: "   ",
+        REDIS_URL: "redis://localhost:6379"
+      })
+    ).toThrow("DATABASE_URL is required");
+  });
 });

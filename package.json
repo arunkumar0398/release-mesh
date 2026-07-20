@@ -8,13 +8,15 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "pnpm -r --if-present build",
+    "build": "corepack pnpm generate:prisma && corepack pnpm -r --if-present build",
     "dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build",
+    "generate:prisma": "corepack pnpm --filter @releasemesh/database generate",
     "lint": "eslint .",
-    "test": "pnpm test:unit && pnpm test:integration && pnpm test:e2e",
-    "test:e2e": "playwright test",
-    "test:integration": "vitest run tests/integration",
-    "test:unit": "vitest run"
+    "test": "corepack pnpm typecheck && corepack pnpm test:unit && corepack pnpm test:integration",
+    "test:e2e": "corepack pnpm generate:prisma && playwright test",
+    "test:integration": "corepack pnpm generate:prisma && vitest run --config vitest.integration.config.ts",
+    "test:unit": "corepack pnpm generate:prisma && vitest run",
+    "typecheck": "corepack pnpm generate:prisma && tsc --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

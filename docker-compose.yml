@@ -6,14 +6,14 @@ services:
       POSTGRES_PASSWORD: releasemesh
       POSTGRES_USER: releasemesh
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
 
@@ -21,3 +21,10 @@ volumes:
   postgres_data:
   redis_data:
   local_artifacts:
+  api_node_modules:
+  worker_node_modules:
+  pricing_node_modules:
+  checkout_node_modules:
+  shell_node_modules:
+  catalog_mfe_node_modules:
+  release_mfe_node_modules:
