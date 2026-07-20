@@ -2,5 +2,15 @@
   "name": "@releasemesh/runner-worker",
   "version": "0.1.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "@releasemesh/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@releasemesh/pricing": "workspace:*",
+    "vitest": "^3.0.4"
+  }
 }
