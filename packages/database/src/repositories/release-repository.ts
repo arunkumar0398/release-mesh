@@ -17,6 +17,13 @@ export interface ReleaseTransitionInput {
   releaseId: string;
 }
 
+export class IdempotencyConflictError extends Error {
+  public constructor() {
+    super("Idempotency key was already used for a different release payload");
+    this.name = "IdempotencyConflictError";
+  }
+}
+
 export class ReleaseRepository {
   public constructor(private readonly prisma: PrismaClient) {}
 
@@ -28,6 +35,7 @@ export class ReleaseRepository {
         });
 
         if (existing) {
+          assertMatchingReleasePayload(existing.componentVersionId, input.componentVersionId);
           return { created: false, release: existing };
         }
 
@@ -64,6 +72,7 @@ export class ReleaseRepository {
         throw error;
       }
 
+      assertMatchingReleasePayload(release.componentVersionId, input.componentVersionId);
       return { created: false, release };
     }
   }
@@ -156,5 +165,14 @@ export class ReleaseRepository {
 
       return transaction.releaseCandidate.findUniqueOrThrow({ where: { id: input.releaseId } });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+}
+
+function assertMatchingReleasePayload(
+  existingComponentVersionId: string,
+  requestedComponentVersionId: string
+): void {
+  if (existingComponentVersionId !== requestedComponentVersionId) {
+    throw new IdempotencyConflictError();
   }
 }

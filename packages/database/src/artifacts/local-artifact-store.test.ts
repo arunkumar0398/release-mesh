@@ -59,6 +59,34 @@ describe("LocalArtifactStore", () => {
     ).rejects.toThrow("Unsupported artifact content representation");
   });
 
+  it.each([
+    ["Redis URL", "REDIS_URL=redis://:redis-password@host:6379", "REDIS_URL=[REDACTED]"],
+    [
+      "URI userinfo",
+      "Connecting to https://demo:password@example.com/private",
+      "Connecting to https://[REDACTED]@example.com/private"
+    ],
+    ["cookie header", "Cookie: session=browser-secret", "Cookie: [REDACTED]"],
+    ["AWS access key", "AWS_ACCESS_KEY_ID=AKIAEXAMPLE", "AWS_ACCESS_KEY_ID=[REDACTED]"],
+    [
+      "mixed JSON and env values",
+      '{"REDIS_URL":"redis://user:secret@host:6379","AZURE_CLIENT_SECRET":"cloud-secret"}\nGOOGLE_API_KEY=google-secret',
+      '{"REDIS_URL":"[REDACTED]","AZURE_CLIENT_SECRET":"[REDACTED]"}\nGOOGLE_API_KEY=[REDACTED]'
+    ]
+  ])("sanitizes %s values", async (_scenario, content, expected) => {
+    const directory = await mkdtemp(join(tmpdir(), "releasemesh-artifacts-"));
+    temporaryDirectories.push(directory);
+    const store = new LocalArtifactStore(directory);
+    const stored = await store.put({
+      content,
+      contentType: "text/plain",
+      kind: "SANITIZED_LOG",
+      releaseId: "release-123"
+    });
+
+    await expect(store.get(stored.id)).resolves.toMatchObject({ content: expected });
+  });
+
   it("does not read paths outside the artifact root", async () => {
     const directory = await mkdtemp(join(tmpdir(), "releasemesh-artifacts-"));
     temporaryDirectories.push(directory);

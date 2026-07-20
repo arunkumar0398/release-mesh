@@ -79,6 +79,30 @@ describe("ReleaseRepository", () => {
     ]);
   });
 
+  it("rejects idempotency-key reuse for a different release payload", async () => {
+    const componentVersion = await createPricingVersion();
+    const otherVersion = await prisma.componentVersion.create({
+      data: {
+        componentId: componentVersion.componentId,
+        version: "2.0.0"
+      }
+    });
+
+    await repository.createRelease({
+      componentVersionId: componentVersion.id,
+      correlationId: "correlation-conflict",
+      idempotencyKey: "idem-conflict"
+    });
+
+    await expect(
+      repository.createRelease({
+        componentVersionId: otherVersion.id,
+        correlationId: "correlation-conflict",
+        idempotencyKey: "idem-conflict"
+      })
+    ).rejects.toThrow("Idempotency key was already used for a different release payload");
+  });
+
   it("atomically guards a lifecycle transition by current status", async () => {
     const componentVersion = await createPricingVersion();
     const created = await repository.createRelease({

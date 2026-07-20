@@ -4,6 +4,7 @@ import { decideReleaseGate } from "./release-gate.js";
 
 const completeChecks = {
   evidenceComplete: true,
+  expectedMandatoryTestIds: ["contract-pricing"],
   mandatoryTests: [{ id: "contract-pricing", status: "PASSED" as const }],
   requiredChecksCompleted: true
 };
@@ -31,6 +32,7 @@ describe("decideReleaseGate", () => {
     expect(
       decideReleaseGate({
         ...completeChecks,
+        expectedMandatoryTestIds: ["browser-checkout"],
         hasIncompatibleRegisteredDependency: false,
         mandatoryTests: [{ id: "browser-checkout", status: "FAILED" }]
       })
@@ -43,6 +45,37 @@ describe("decideReleaseGate", () => {
         ...completeChecks,
         evidenceComplete: false,
         hasIncompatibleRegisteredDependency: false
+      })
+    ).toBe("ERROR");
+  });
+
+  it.each([
+    ["missing", []],
+    [
+      "duplicate",
+      [
+        { id: "contract-pricing", status: "PASSED" as const },
+        { id: "contract-pricing", status: "PASSED" as const }
+      ]
+    ],
+    ["unknown", [{ id: "browser-checkout", status: "PASSED" as const }]]
+  ])("returns ERROR for %s mandatory-test results", (_scenario, mandatoryTests) => {
+    expect(
+      decideReleaseGate({
+        ...completeChecks,
+        hasIncompatibleRegisteredDependency: false,
+        mandatoryTests
+      })
+    ).toBe("ERROR");
+  });
+
+  it("returns ERROR when no mandatory tests are expected", () => {
+    expect(
+      decideReleaseGate({
+        ...completeChecks,
+        expectedMandatoryTestIds: [],
+        hasIncompatibleRegisteredDependency: false,
+        mandatoryTests: []
       })
     ).toBe("ERROR");
   });

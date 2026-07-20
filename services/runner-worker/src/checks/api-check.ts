@@ -2,6 +2,7 @@ export interface PricingApiCheckOptions {
   fetchImpl?: typeof fetch;
   pricingBaseUrl: string;
   timeoutMs?: number;
+  trustedPricingOrigins: readonly string[];
 }
 
 interface PricingApiCheckBaseResult {
@@ -75,7 +76,7 @@ async function executePricingApiCheck(
   let response: Response;
 
   try {
-    response = await fetchImpl(endpoint, { signal });
+    response = await fetchImpl(endpoint, { redirect: "error", signal });
   } catch {
     return createErrorResult(signal.aborted ? "TIMEOUT" : "NETWORK_ERROR", null);
   }
@@ -121,9 +122,10 @@ async function executePricingApiCheck(
 export function createPricingApiCheck({
   fetchImpl = fetch,
   pricingBaseUrl,
-  timeoutMs = 5_000
+  timeoutMs = 5_000,
+  trustedPricingOrigins
 }: PricingApiCheckOptions): () => Promise<PricingApiCheckResult> {
-  const endpoint = `${pricingBaseUrl.replace(/\/$/, "")}/pricing/checkout-demo`;
+  const endpoint = resolveTrustedPricingEndpoint(pricingBaseUrl, trustedPricingOrigins);
 
   return async () => {
     const abortController = new AbortController();
@@ -144,4 +146,55 @@ export function createPricingApiCheck({
       clearTimeout(timeout!);
     }
   };
+}
+
+function resolveTrustedPricingEndpoint(
+  pricingBaseUrl: string,
+  trustedPricingOrigins: readonly string[]
+): string {
+  let pricingUrl: URL;
+
+  try {
+    pricingUrl = new URL(pricingBaseUrl);
+  } catch {
+    throw new Error("Untrusted Pricing URL");
+  }
+
+  const hasTrustedShape =
+    (pricingUrl.protocol === "http:" || pricingUrl.protocol === "https:") &&
+    pricingUrl.username === "" &&
+    pricingUrl.password === "" &&
+    pricingUrl.pathname === "/" &&
+    pricingUrl.search === "" &&
+    pricingUrl.hash === "";
+  const trustedOrigins = trustedPricingOrigins.map((origin) => normalizeTrustedOrigin(origin));
+
+  if (!hasTrustedShape || !trustedOrigins.includes(pricingUrl.origin)) {
+    throw new Error("Untrusted Pricing URL");
+  }
+
+  return new URL("/pricing/checkout-demo", pricingUrl).toString();
+}
+
+function normalizeTrustedOrigin(origin: string): string {
+  let trustedUrl: URL;
+
+  try {
+    trustedUrl = new URL(origin);
+  } catch {
+    throw new Error("Untrusted Pricing URL");
+  }
+
+  if (
+    (trustedUrl.protocol !== "http:" && trustedUrl.protocol !== "https:") ||
+    trustedUrl.username !== "" ||
+    trustedUrl.password !== "" ||
+    trustedUrl.pathname !== "/" ||
+    trustedUrl.search !== "" ||
+    trustedUrl.hash !== ""
+  ) {
+    throw new Error("Untrusted Pricing URL");
+  }
+
+  return trustedUrl.origin;
 }

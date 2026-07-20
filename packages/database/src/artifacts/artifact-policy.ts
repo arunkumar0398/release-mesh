@@ -38,14 +38,35 @@ function sizeOf(content: ArtifactContent): number {
 }
 
 function sanitizeLog(content: string): string {
+  const sensitiveKeys = [
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "azure_client_secret",
+    "google_application_credentials",
+    "google_api_key",
+    "database_url",
+    "databaseurl",
+    "redis_url",
+    "redisurl",
+    "api[_-]?key",
+    "password",
+    "token",
+    "secret"
+  ].join("|");
+
   return content
-    .replace(/(^|[,{]\s*)(["']?authorization["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^,\r\n}]+)/gim, "$1$2[REDACTED]")
     .replace(
-      /((?:["']?(?:api[_-]?key|password|token|secret|database_url|databaseurl)["']?\s*[:=]\s*)["'])[^"'\r\n]*(["'])/gi,
+      /(^|[,{]\s*)(["']?(?:authorization|cookie|set-cookie)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^,\r\n}]+)/gim,
+      "$1$2[REDACTED]"
+    )
+    .replace(
+      new RegExp(`((?:^|[,{]\\s*)["']?(?:${sensitiveKeys})["']?\\s*[:=]\\s*["'])[^"'\\r\\n]*(["'])`, "gim"),
       "$1[REDACTED]$2"
     )
     .replace(
-      /(["']?(?:api[_-]?key|password|token|secret|database_url|databaseurl)["']?\s*[:=]\s*)(?!["'])[^,\s}\r\n]+/gi,
+      new RegExp(`((?:^|[,{]\\s*)["']?(?:${sensitiveKeys})["']?\\s*[:=]\\s*)(?!["'])[^,\\s}\\r\\n]+`, "gim"),
       "$1[REDACTED]"
-    );
+    )
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, "$1[REDACTED]@");
 }

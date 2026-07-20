@@ -24,10 +24,15 @@ test.afterEach(async () => {
 });
 
 test("Pricing v2 captures the broken Checkout experience", async ({ page }, testInfo) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
   await startPricing("v2");
 
   await page.goto("/");
 
+  await expect(page.locator('link[rel~="icon"]')).toHaveAttribute("href", /.+/);
   await expect(page.getByRole("alert")).toContainText("Checkout unavailable");
   await expect(page.getByRole("alert")).toContainText(
     "Pricing response is incompatible: missing price, currency"
@@ -39,14 +44,21 @@ test("Pricing v2 captures the broken Checkout experience", async ({ page }, test
     path: screenshotPath,
     contentType: "image/png"
   });
+  expect(consoleErrors).toEqual([]);
 });
 
 test("Pricing v2.1 keeps Checkout working", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
   await startPricing("v2.1");
 
   await page.goto("/");
 
+  await expect(page.locator('link[rel~="icon"]')).toHaveAttribute("href", /.+/);
   await expect(page.getByText("Pricing available")).toBeVisible();
   await expect(page.getByText("INR 1299")).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(consoleErrors).toEqual([]);
 });

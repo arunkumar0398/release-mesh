@@ -25,6 +25,14 @@ function respondWith(body: unknown): void {
 }
 
 describe("Checkout", () => {
+  it("announces that pricing is loading", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+
+    render(<App pricingBaseUrl="http://pricing.test" />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Loading pricing");
+  });
+
   it.each([
     ["v1", { currency: "INR", price: 1299 }],
     ["v2.1", { amount: 1299, currency: "INR", currencyCode: "INR", price: 1299 }]
@@ -34,7 +42,8 @@ describe("Checkout", () => {
     render(<App pricingBaseUrl="http://pricing.test" />);
 
     expect(await screen.findByText("INR 1299")).toBeInTheDocument();
-    expect(screen.getByText("Pricing available")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Pricing available");
+    expect(screen.getByRole("status")).toHaveTextContent("INR 1299");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
