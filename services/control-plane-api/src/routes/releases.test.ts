@@ -15,6 +15,27 @@ const release = {
   status: "QUEUED" as const
 };
 
+const releaseDetails = {
+  ...release,
+  testRuns: [{
+    attempt: 0,
+    endedAt: "2026-07-21T10:00:02.000Z",
+    id: "run-1",
+    startedAt: "2026-07-21T10:00:01.000Z",
+    status: "FAILED",
+    testId: "contract-pricing"
+  }],
+  transitions: [{
+    attempt: 0,
+    createdAt: "2026-07-21T10:00:00.000Z",
+    errorCode: null,
+    fromStatus: null,
+    id: "transition-1",
+    reason: null,
+    toStatus: "DRAFT" as const
+  }]
+};
+
 function createDependencies(): ControlPlaneDependencies {
   return {
     catalog: {
@@ -31,7 +52,7 @@ function createDependencies(): ControlPlaneDependencies {
       })
     },
     releases: {
-      getRelease: vi.fn().mockResolvedValue(release),
+      getRelease: vi.fn().mockResolvedValue(releaseDetails),
       listArtifacts: vi.fn().mockResolvedValue([{
         attempt: 1,
         binaryContent: null,
@@ -197,7 +218,7 @@ describe("release routes", () => {
     const retryResponse = await server.inject({ method: "POST", url: "/releases/release-123/retry" });
 
     expect(getResponse.statusCode).toBe(200);
-    expect(getResponse.json()).toEqual(release);
+    expect(getResponse.json()).toEqual(releaseDetails);
     expect(retryResponse.statusCode).toBe(202);
     expect(dependencies.releases.retryRelease).toHaveBeenCalledWith({
       correlationId: expect.any(String),

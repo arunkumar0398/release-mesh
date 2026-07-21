@@ -111,6 +111,45 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  release-mfe:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: corepack pnpm --filter @releasemesh/release-mfe dev --host 0.0.0.0 --port 4175
+    environment:
+      CONTROL_PLANE_API_TARGET: http://api:4000
+      RELEASE_MFE_ORIGIN: http://127.0.0.1:4175
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4175/mf-manifest.json').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:4175:4175"
+
+  shell:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: corepack pnpm --filter @releasemesh/shell dev --host 0.0.0.0 --port 4174
+    environment:
+      CONTROL_PLANE_API_TARGET: http://api:4000
+    depends_on:
+      api:
+        condition: service_healthy
+      release-mfe:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4174').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:4174:4174"
+
 volumes:
   postgres_data:
   redis_data:

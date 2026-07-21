@@ -10,6 +10,30 @@ export interface ReleaseView {
   status: ReleaseStatus;
 }
 
+export interface ReleaseTransitionView {
+  attempt: number;
+  createdAt: string;
+  errorCode: string | null;
+  fromStatus: ReleaseStatus | null;
+  id: string;
+  reason: string | null;
+  toStatus: ReleaseStatus;
+}
+
+export interface ReleaseTestRunView {
+  attempt: number;
+  endedAt: string | null;
+  id: string;
+  startedAt: string | null;
+  status: string;
+  testId: string;
+}
+
+export interface ReleaseDetailsView extends ReleaseView {
+  testRuns: ReleaseTestRunView[];
+  transitions: ReleaseTransitionView[];
+}
+
 export interface ReleaseArtifactView {
   attempt: number | null;
   binaryContent: string | null;
@@ -30,7 +54,7 @@ export interface SubmitReleaseInput {
 }
 
 export interface ReleaseRoutesDependencies {
-  getRelease(releaseId: string): Promise<ReleaseView | null>;
+  getRelease(releaseId: string): Promise<ReleaseDetailsView | null>;
   listArtifacts(releaseId: string): Promise<ReleaseArtifactView[]>;
   retryRelease(input: { correlationId: string; releaseId: string }): Promise<ReleaseView>;
   submitRelease(input: SubmitReleaseInput): Promise<{ created: boolean; release: ReleaseView }>;
