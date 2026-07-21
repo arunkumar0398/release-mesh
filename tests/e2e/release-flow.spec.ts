@@ -17,6 +17,10 @@ test("Shell resolves and displays the Release remote from runtime configuration"
     runtimeConfigRequested = true;
     await route.fulfill({
       body: JSON.stringify({
+        catalog: {
+          apiBaseUrl: "/api",
+          manifestUrl: "http://127.0.0.1:4176/mf-manifest.json"
+        },
         release: {
           apiBaseUrl: "/api",
           manifestUrl: "http://127.0.0.1:4175/mf-manifest.json"

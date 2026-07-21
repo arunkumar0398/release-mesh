@@ -1,6 +1,12 @@
 import { loadRemote, registerRemotes } from "@module-federation/enhanced/runtime";
 import type { ComponentType } from "react";
 
+export interface CatalogRemoteModule {
+  CatalogApp: ComponentType<{ apiBaseUrl?: string }>;
+  apiBaseUrl: string;
+  catalogMfeVersion: string;
+}
+
 export interface ReleaseRemoteModule {
   ReleaseApp: ComponentType<{ apiBaseUrl?: string }>;
   apiBaseUrl: string;
@@ -12,71 +18,116 @@ export interface FederationRuntime {
   registerRemotes(remotes: Array<{ entry: string; name: string }>): Promise<void> | void;
 }
 
-export interface LoadReleaseRemoteOptions {
+export interface LoadRemoteOptions {
   configUrl?: string;
   fetchImpl?: typeof fetch;
   runtime?: FederationRuntime;
 }
+
+export type LoadReleaseRemoteOptions = LoadRemoteOptions;
 
 const defaultRuntime: FederationRuntime = {
   loadRemote: (moduleId) => loadRemote(moduleId),
   registerRemotes: (remotes) => registerRemotes(remotes)
 };
 
-export async function loadReleaseRemote({
-  configUrl = "/remotes.json",
-  fetchImpl = fetch,
-  runtime = defaultRuntime
-}: LoadReleaseRemoteOptions = {}): Promise<ReleaseRemoteModule> {
-  const response = await fetchImpl(configUrl, { cache: "no-store" });
-  if (!response.ok) throw new Error("Release remote configuration is unavailable");
-  const config = await response.json() as unknown;
-  const { apiBaseUrl, manifestUrl } = readReleaseConfig(config);
-
-  await runtime.registerRemotes([{ entry: manifestUrl, name: "release_mfe" }]);
-  const remote = await runtime.loadRemote("release_mfe/ReleaseApp");
-  if (!isReleaseRemoteModule(remote)) {
-    throw new Error("Release remote module is invalid");
-  }
+export async function loadCatalogRemote(
+  options: LoadRemoteOptions = {}
+): Promise<CatalogRemoteModule> {
+  const { apiBaseUrl, remote } = await loadConfiguredRemote(
+    "catalog",
+    "Catalog",
+    "catalog_mfe",
+    "catalog_mfe/CatalogApp",
+    options
+  );
+  if (!isCatalogRemoteModule(remote)) throw new Error("Catalog remote module is invalid");
   return { ...remote, apiBaseUrl };
 }
 
-function readReleaseConfig(config: unknown): { apiBaseUrl: string; manifestUrl: string } {
-  if (
-    typeof config !== "object"
-    || config === null
-    || !("release" in config)
-    || typeof (config as { release?: unknown }).release !== "object"
-    || (config as { release?: unknown }).release === null
-    || !("manifestUrl" in (config as { release: object }).release)
-    || !("apiBaseUrl" in (config as { release: object }).release)
-    || typeof (config as { release: { manifestUrl?: unknown } }).release.manifestUrl !== "string"
-    || typeof (config as { release: { apiBaseUrl?: unknown } }).release.apiBaseUrl !== "string"
-  ) {
-    throw new Error("Release remote configuration is missing");
+export async function loadReleaseRemote(
+  options: LoadReleaseRemoteOptions = {}
+): Promise<ReleaseRemoteModule> {
+  const { apiBaseUrl, remote } = await loadConfiguredRemote(
+    "release",
+    "Release",
+    "release_mfe",
+    "release_mfe/ReleaseApp",
+    options
+  );
+  if (!isReleaseRemoteModule(remote)) throw new Error("Release remote module is invalid");
+  return { ...remote, apiBaseUrl };
+}
+
+async function loadConfiguredRemote(
+  configKey: "catalog" | "release",
+  label: "Catalog" | "Release",
+  remoteName: string,
+  moduleId: string,
+  {
+    configUrl = "/remotes.json",
+    fetchImpl = fetch,
+    runtime = defaultRuntime
+  }: LoadRemoteOptions
+): Promise<{ apiBaseUrl: string; remote: unknown }> {
+  const response = await fetchImpl(configUrl, { cache: "no-store" });
+  if (!response.ok) throw new Error(`${label} remote configuration is unavailable`);
+  const config = await response.json() as unknown;
+  const { apiBaseUrl, manifestUrl } = readRemoteConfig(config, configKey, label);
+
+  await runtime.registerRemotes([{ entry: manifestUrl, name: remoteName }]);
+  const remote = await runtime.loadRemote(moduleId);
+  return { apiBaseUrl, remote };
+}
+
+function readRemoteConfig(
+  config: unknown,
+  configKey: "catalog" | "release",
+  label: "Catalog" | "Release"
+): { apiBaseUrl: string; manifestUrl: string } {
+  if (typeof config !== "object" || config === null || !(configKey in config)) {
+    throw new Error(`${label} remote configuration is missing`);
+  }
+  const candidate = (config as Record<string, unknown>)[configKey];
+  if (typeof candidate !== "object" || candidate === null) {
+    throw new Error(`${label} remote configuration is missing`);
+  }
+  const remote = candidate as Record<string, unknown>;
+  if (typeof remote.manifestUrl !== "string" || typeof remote.apiBaseUrl !== "string") {
+    throw new Error(`${label} remote configuration is missing`);
   }
 
-  const release = (config as { release: { apiBaseUrl: string; manifestUrl: string } }).release;
-  const manifestUrl = release.manifestUrl;
-  const parsed = new URL(manifestUrl, globalThis.location?.href ?? "http://127.0.0.1");
+  return {
+    apiBaseUrl: readHttpUrl(remote.apiBaseUrl, "Control-plane API"),
+    manifestUrl: readHttpUrl(remote.manifestUrl, `${label} manifest`)
+  };
+}
+
+function readHttpUrl(value: string, label: string): string {
+  const parsed = new URL(value, globalThis.location?.href ?? "http://127.0.0.1");
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("Release manifest URL must use HTTP or HTTPS");
-  }
-  const apiBaseUrl = new URL(release.apiBaseUrl, globalThis.location?.href ?? "http://127.0.0.1");
-  if (apiBaseUrl.protocol !== "http:" && apiBaseUrl.protocol !== "https:") {
-    throw new Error("Control-plane API URL must use HTTP or HTTPS");
+    throw new Error(`${label} URL must use HTTP or HTTPS`);
   }
   if (
-    apiBaseUrl.username
-    || apiBaseUrl.password
-    || apiBaseUrl.search
-    || apiBaseUrl.hash
-    || release.apiBaseUrl.includes("?")
-    || release.apiBaseUrl.includes("#")
+    parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+    || value.includes("?")
+    || value.includes("#")
   ) {
-    throw new Error("Control-plane API URL must not include credentials, a query, or a fragment");
+    throw new Error(`${label} URL must not include credentials, a query, or a fragment`);
   }
-  return { apiBaseUrl: apiBaseUrl.href, manifestUrl: parsed.href };
+  return parsed.href;
+}
+
+function isCatalogRemoteModule(value: unknown): value is Omit<CatalogRemoteModule, "apiBaseUrl"> {
+  return typeof value === "object"
+    && value !== null
+    && "CatalogApp" in value
+    && typeof (value as { CatalogApp?: unknown }).CatalogApp === "function"
+    && "catalogMfeVersion" in value
+    && typeof (value as { catalogMfeVersion?: unknown }).catalogMfeVersion === "string";
 }
 
 function isReleaseRemoteModule(value: unknown): value is Omit<ReleaseRemoteModule, "apiBaseUrl"> {
