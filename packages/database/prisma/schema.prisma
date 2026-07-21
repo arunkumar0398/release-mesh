@@ -114,6 +114,7 @@ model ReleaseTransition {
 model TestRun {
   id        String           @id @default(cuid())
   releaseId String
+  attempt   Int
   testId    String
   status    String
   startedAt DateTime?
@@ -123,6 +124,7 @@ model TestRun {
 
   @@index([releaseId])
   @@unique([id, releaseId])
+  @@unique([releaseId, attempt, testId])
 }
 
 model EvidenceArtifact {

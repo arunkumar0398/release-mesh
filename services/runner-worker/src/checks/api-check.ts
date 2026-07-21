@@ -69,14 +69,20 @@ function createErrorResult(
 }
 
 async function executePricingApiCheck(
+  candidateVersion: PricingContractVersion,
   endpoint: string,
   fetchImpl: typeof fetch,
   signal: AbortSignal
 ): Promise<PricingApiCheckResult> {
   let response: Response;
+  const candidateEndpoint = new URL(endpoint);
+  candidateEndpoint.searchParams.set("candidateVersion", candidateVersion);
 
   try {
-    response = await fetchImpl(endpoint, { redirect: "error", signal });
+    response = await fetchImpl(candidateEndpoint.toString(), {
+      redirect: "error",
+      signal
+    });
   } catch {
     return createErrorResult(signal.aborted ? "TIMEOUT" : "NETWORK_ERROR", null);
   }
@@ -124,10 +130,10 @@ export function createPricingApiCheck({
   pricingBaseUrl,
   timeoutMs = 5_000,
   trustedPricingOrigins
-}: PricingApiCheckOptions): () => Promise<PricingApiCheckResult> {
+}: PricingApiCheckOptions): (candidateVersion: PricingContractVersion) => Promise<PricingApiCheckResult> {
   const endpoint = resolveTrustedPricingEndpoint(pricingBaseUrl, trustedPricingOrigins);
 
-  return async () => {
+  return async (candidateVersion) => {
     const abortController = new AbortController();
     let timeout: ReturnType<typeof setTimeout>;
     const timeoutResult = new Promise<PricingApiCheckErrorResult>((resolve) => {
@@ -139,7 +145,7 @@ export function createPricingApiCheck({
 
     try {
       return await Promise.race([
-        executePricingApiCheck(endpoint, fetchImpl, abortController.signal),
+        executePricingApiCheck(candidateVersion, endpoint, fetchImpl, abortController.signal),
         timeoutResult
       ]);
     } finally {
@@ -198,3 +204,4 @@ function normalizeTrustedOrigin(origin: string): string {
 
   return trustedUrl.origin;
 }
+import type { PricingContractVersion } from "@releasemesh/contracts";

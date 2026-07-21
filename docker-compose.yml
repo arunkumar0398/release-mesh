@@ -5,6 +5,11 @@ services:
       POSTGRES_DB: releasemesh
       POSTGRES_PASSWORD: releasemesh
       POSTGRES_USER: releasemesh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U releasemesh -d releasemesh"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
@@ -12,19 +17,100 @@ services:
 
   redis:
     image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
 
+  pricing:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: corepack pnpm --filter @releasemesh/pricing start
+    environment:
+      PORT: "4100"
+      PRICING_MODE: ${PRICING_MODE:-v2}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/pricing/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:4100:4100"
+
+  checkout:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: corepack pnpm --filter @releasemesh/checkout dev --host 0.0.0.0 --port 4173
+    environment:
+      PRICING_PROXY_TARGET: http://pricing:4100
+      VITE_PRICING_BASE_URL: ""
+    depends_on:
+      pricing:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4173').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:4173:4173"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >-
+      sh -c "corepack pnpm --filter @releasemesh/database generate &&
+      corepack pnpm --filter @releasemesh/database migrate:deploy &&
+      corepack pnpm --filter @releasemesh/database seed &&
+      corepack pnpm --filter @releasemesh/control-plane-api start"
+    environment:
+      DATABASE_URL: postgresql://releasemesh:releasemesh@postgres:5432/releasemesh
+      PORT: "4000"
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/livez').then(r=>{if(r.status!==200)process.exit(1)})"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:4000:4000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: >-
+      sh -c "corepack pnpm --filter @releasemesh/database generate &&
+      corepack pnpm --filter @releasemesh/runner-worker start"
+    environment:
+      CHECKOUT_BASE_URL: http://checkout:4173
+      DATABASE_URL: postgresql://releasemesh:releasemesh@postgres:5432/releasemesh
+      PRICING_BASE_URL: http://pricing:4100
+      REDIS_URL: redis://redis:6379
+      TRUSTED_CHECKOUT_ORIGINS: http://checkout:4173
+      TRUSTED_PRICING_ORIGINS: http://pricing:4100
+    depends_on:
+      api:
+        condition: service_healthy
+      checkout:
+        condition: service_healthy
+      pricing:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
-  local_artifacts:
-  api_node_modules:
-  worker_node_modules:
-  pricing_node_modules:
-  checkout_node_modules:
-  shell_node_modules:
-  catalog_mfe_node_modules:
-  release_mfe_node_modules:

@@ -48,6 +48,19 @@ describe("Pricing fixture", () => {
     await expect(response.json()).resolves.toEqual(expectedBody);
   });
 
+  it("serves the explicitly requested bundled candidate instead of the ambient default", async () => {
+    const baseUrl = await startServer("v2");
+
+    const response = await fetch(`${baseUrl}/pricing/checkout-demo?candidateVersion=v2.1`);
+
+    await expect(response.json()).resolves.toEqual({
+      amount: 1299,
+      currency: "INR",
+      currencyCode: "INR",
+      price: 1299
+    });
+  });
+
   it("rejects non-GET methods on the Pricing route", async () => {
     const baseUrl = await startServer("v1");
 

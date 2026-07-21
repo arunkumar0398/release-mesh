@@ -43,6 +43,14 @@ describe("seedCatalog", () => {
         requiredEndpoints: ["GET /pricing/:productId"]
       })
     ]);
+    await expect(prisma.componentVersion.findMany({
+      orderBy: { version: "asc" },
+      select: { version: true }
+    })).resolves.toEqual([
+      { version: "1.0.0" },
+      { version: "v2" },
+      { version: "v2.1" }
+    ]);
   });
 
   it("executes the package seed CLI on Windows-compatible file paths", async () => {

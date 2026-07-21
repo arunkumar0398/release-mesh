@@ -5,9 +5,11 @@
   "type": "module",
   "exports": "./src/server.ts",
   "scripts": {
+    "start": "tsx src/main.ts",
     "test": "vitest run src"
   },
   "devDependencies": {
+    "tsx": "^4.20.3",
     "vitest": "^3.0.4"
   }
 }

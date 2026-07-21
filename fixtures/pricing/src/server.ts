@@ -27,11 +27,16 @@ export function createPricingServer({ mode }: PricingServerOptions): Server {
       return;
     }
 
+    const requestedCandidate = requestUrl.searchParams.get("candidateVersion");
+    const responseMode = requestedCandidate === "v2" || requestedCandidate === "v2.1"
+      ? requestedCandidate
+      : mode;
+
     response
       .writeHead(200, {
         "Access-Control-Allow-Origin": "*",
         "Content-Type": "application/json; charset=utf-8"
       })
-      .end(JSON.stringify(pricingResponses[mode]));
+      .end(JSON.stringify(pricingResponses[responseMode]));
   });
 }

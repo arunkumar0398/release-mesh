@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "../generated/prisma/client.js";
+import { TestRunRepository } from "../repositories/test-run-repository.js";
 import { PostgresArtifactStore } from "./postgres-artifact-store.js";
 
 const prisma = new PrismaClient();
@@ -178,7 +179,7 @@ describe("PostgresArtifactStore", () => {
     const firstRelease = await createRelease();
     const secondRelease = await createRelease("pricing-artifact-second", "artifact-store-release-second");
     const testRun = await prisma.testRun.create({
-      data: { releaseId: firstRelease.id, status: "PASSED", testId: "contract-check" }
+      data: { attempt: 0, releaseId: firstRelease.id, status: "PASSED", testId: "contract-check" }
     });
 
     await expect(
@@ -190,6 +191,24 @@ describe("PostgresArtifactStore", () => {
         testRunId: testRun.id
       })
     ).rejects.toThrow("Test run does not belong to the release");
+  });
+
+  it("restarts a test within the same release attempt without duplicating stale evidence", async () => {
+    const release = await createRelease();
+    const repository = new TestRunRepository(prisma);
+    const firstRun = await repository.start({ attempt: 0, releaseId: release.id, testId: "api-pricing" });
+    await store.put({
+      content: "first run",
+      contentType: "text/plain",
+      kind: "SANITIZED_LOG",
+      releaseId: release.id,
+      testRunId: firstRun.id
+    });
+
+    const restarted = await repository.start({ attempt: 0, releaseId: release.id, testId: "api-pricing" });
+
+    expect(restarted.id).toBe(firstRun.id);
+    await expect(prisma.evidenceArtifact.count({ where: { testRunId: restarted.id } })).resolves.toBe(0);
   });
 });
 

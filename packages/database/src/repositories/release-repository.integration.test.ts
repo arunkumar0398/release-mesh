@@ -154,6 +154,17 @@ describe("ReleaseRepository", () => {
       attempt: 1,
       status: "QUEUED"
     });
+    await expect(repository.transitionRelease({
+      correlationId: "stale-attempt-zero",
+      expectedAttempt: 0,
+      expectedStatus: "QUEUED",
+      nextStatus: "ERROR",
+      releaseId: created.release.id
+    })).rejects.toThrow("Release attempt changed before transition could be applied");
+    await expect(repository.findReleaseById(created.release.id)).resolves.toMatchObject({
+      attempt: 1,
+      status: "QUEUED"
+    });
     await repository.transitionRelease({
       correlationId: "correlation-retry",
       expectedStatus: "QUEUED",
