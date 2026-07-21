@@ -13,11 +13,13 @@ export async function seedCatalog(prisma: PrismaClient): Promise<void> {
       where: { name: "pricing" }
     });
 
-    await transaction.componentVersion.upsert({
-      create: { componentId: pricing.id, version: "1.0.0" },
-      update: {},
-      where: { componentId_version: { componentId: pricing.id, version: "1.0.0" } }
-    });
+    for (const version of ["1.0.0", "v2", "v2.1"]) {
+      await transaction.componentVersion.upsert({
+        create: { componentId: pricing.id, version },
+        update: {},
+        where: { componentId_version: { componentId: pricing.id, version } }
+      });
+    }
     await transaction.contract.upsert({
       create: {
         endpoint: "GET /pricing/:productId",

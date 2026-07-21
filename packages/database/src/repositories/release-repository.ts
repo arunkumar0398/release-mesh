@@ -27,6 +27,40 @@ export class IdempotencyConflictError extends Error {
 export class ReleaseRepository {
   public constructor(private readonly prisma: PrismaClient) {}
 
+  public findQueuedBefore(olderThan: Date) {
+    return this.prisma.releaseCandidate.findMany({
+      orderBy: { updatedAt: "asc" },
+      where: {
+        status: DatabaseReleaseStatus.QUEUED,
+        updatedAt: { lt: olderThan }
+      }
+    });
+  }
+
+  public findTestingBefore(olderThan: Date) {
+    return this.prisma.releaseCandidate.findMany({
+      orderBy: { updatedAt: "asc" },
+      where: {
+        status: DatabaseReleaseStatus.TESTING,
+        updatedAt: { lt: olderThan }
+      }
+    });
+  }
+
+  public findReleaseById(releaseId: string) {
+    return this.prisma.releaseCandidate.findUnique({
+      include: { componentVersion: { include: { component: true } } },
+      where: { id: releaseId }
+    });
+  }
+
+  public listArtifacts(releaseId: string) {
+    return this.prisma.evidenceArtifact.findMany({
+      orderBy: { createdAt: "asc" },
+      where: { releaseId }
+    });
+  }
+
   public async createRelease(input: CreateReleaseInput) {
     try {
       return await this.prisma.$transaction(async (transaction) => {
@@ -72,6 +106,77 @@ export class ReleaseRepository {
         throw error;
       }
 
+      assertMatchingReleasePayload(release.componentVersionId, input.componentVersionId);
+      return { created: false, release };
+    }
+  }
+
+  public async createQueuedRelease(input: CreateReleaseInput) {
+    assertTransition(null, "DRAFT");
+    assertTransition("DRAFT", "VALIDATING");
+    assertTransition("VALIDATING", "QUEUED");
+
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const existing = await transaction.releaseCandidate.findUnique({
+          where: { idempotencyKey: input.idempotencyKey }
+        });
+        if (existing) {
+          assertMatchingReleasePayload(existing.componentVersionId, input.componentVersionId);
+          return { created: false, release: existing };
+        }
+
+        const release = await transaction.releaseCandidate.create({
+          data: {
+            componentVersionId: input.componentVersionId,
+            idempotencyKey: input.idempotencyKey,
+            status: DatabaseReleaseStatus.DRAFT
+          }
+        });
+        const transitionTime = Date.now();
+        await transaction.releaseTransition.createMany({
+          data: [
+            {
+              attempt: release.attempt,
+              correlationId: input.correlationId,
+              createdAt: new Date(transitionTime),
+              fromStatus: null,
+              releaseId: release.id,
+              toStatus: DatabaseReleaseStatus.DRAFT
+            },
+            {
+              attempt: release.attempt,
+              correlationId: input.correlationId,
+              createdAt: new Date(transitionTime + 1),
+              fromStatus: DatabaseReleaseStatus.DRAFT,
+              releaseId: release.id,
+              toStatus: DatabaseReleaseStatus.VALIDATING
+            },
+            {
+              attempt: release.attempt,
+              correlationId: input.correlationId,
+              createdAt: new Date(transitionTime + 2),
+              fromStatus: DatabaseReleaseStatus.VALIDATING,
+              releaseId: release.id,
+              toStatus: DatabaseReleaseStatus.QUEUED
+            }
+          ]
+        });
+        const queued = await transaction.releaseCandidate.update({
+          data: { status: DatabaseReleaseStatus.QUEUED, version: { increment: 2 } },
+          where: { id: release.id }
+        });
+        return { created: true, release: queued };
+      }, { maxWait: 5_000 });
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
+        throw error;
+      }
+
+      const release = await this.prisma.releaseCandidate.findUnique({
+        where: { idempotencyKey: input.idempotencyKey }
+      });
+      if (!release) throw error;
       assertMatchingReleasePayload(release.componentVersionId, input.componentVersionId);
       return { created: false, release };
     }

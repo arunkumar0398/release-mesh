@@ -11,6 +11,6 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    <App pricingBaseUrl={import.meta.env.VITE_PRICING_BASE_URL} />
   </StrictMode>
 );
