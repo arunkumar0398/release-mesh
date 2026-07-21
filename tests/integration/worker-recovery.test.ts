@@ -5,6 +5,7 @@ import { ReleaseRepository } from "../../packages/database/src/repositories/rele
 import { WorkerHeartbeatRepository } from "../../packages/database/src/repositories/worker-heartbeat-repository.js";
 import { HealthService } from "../../services/control-plane-api/src/health-service.js";
 import { startReleaseWorker } from "../../services/runner-worker/src/index.js";
+import { ReleaseProcessingError } from "../../services/runner-worker/src/release-processor.js";
 import { createReleaseQueue } from "../../services/runner-worker/src/queues/release-queue.js";
 import {
   recoverStrandedTestingReleases,
@@ -116,6 +117,84 @@ describe("worker recovery", () => {
     ).resolves.toMatchObject({ errorCode: "WORKER_CRASHED", toStatus: "ERROR" });
     await expect(queue.getJob(release.id)).resolves.toBeUndefined();
     expect(processor.process).toHaveBeenCalledTimes(3);
+  }, 20_000);
+
+  it("persists the exhausted operational error code after capped retries", async () => {
+    const release = await createRelease("QUEUED");
+    const releaseRepository = new ReleaseRepository(prisma);
+    const queue = createReleaseQueue({ queueName: `worker-operational-${randomUUID()}`, redisUrl });
+    closeables.push(queue);
+    const processor = {
+      process: vi.fn(async () => {
+        const current = await releaseRepository.findReleaseById(release.id);
+        if (current?.status === "QUEUED") {
+          await releaseRepository.transitionRelease({
+            correlationId: "operational-worker",
+            expectedStatus: "QUEUED",
+            nextStatus: "TESTING",
+            releaseId: release.id
+          });
+        }
+        throw new ReleaseProcessingError(
+          "CHECK_EXECUTION_FAILED",
+          new Error("Pricing unavailable")
+        );
+      })
+    };
+    const worker = startReleaseWorker({
+      onError: vi.fn(),
+      processor,
+      queue,
+      releaseRepository
+    });
+    closeables.push(worker);
+
+    await queue.enqueue(release.id);
+    await waitForError(release.id);
+
+    await expect(
+      prisma.releaseTransition.findFirst({
+        orderBy: { createdAt: "desc" },
+        where: { releaseId: release.id }
+      })
+    ).resolves.toMatchObject({
+      errorCode: "CHECK_EXECUTION_FAILED",
+      toStatus: "ERROR"
+    });
+    expect(processor.process).toHaveBeenCalledTimes(3);
+  }, 20_000);
+
+  it("removes an exhausted stale-attempt job without mutating the current attempt", async () => {
+    const release = await createRelease("QUEUED");
+    const releaseRepository = new ReleaseRepository(prisma);
+    await releaseRepository.transitionRelease({
+      correlationId: "stale-job-error",
+      expectedStatus: "QUEUED",
+      nextStatus: "ERROR",
+      releaseId: release.id
+    });
+    await releaseRepository.retryRelease(release.id, "stale-job-retry");
+    const queue = createReleaseQueue({ queueName: `worker-stale-${randomUUID()}`, redisUrl });
+    closeables.push(queue);
+    const worker = startReleaseWorker({
+      onError: vi.fn(),
+      processor: { process: vi.fn().mockRejectedValue(new Error("stale job failed")) },
+      queue,
+      releaseRepository
+    });
+    closeables.push(worker);
+
+    await queue.enqueue(release.id, 0);
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline && await queue.getJob(release.id)) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    await expect(queue.getJob(release.id)).resolves.toBeUndefined();
+    await expect(releaseRepository.findReleaseById(release.id)).resolves.toMatchObject({
+      attempt: 1,
+      status: "QUEUED"
+    });
   }, 20_000);
 
   it("recovers an old TESTING release without consulting queue history", async () => {

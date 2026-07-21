@@ -18,6 +18,7 @@ export function registerHealthRoutes(
   server: FastifyInstance,
   health: HealthRoutesDependencies
 ): void {
+  server.get("/livez", async () => ({ status: "ok" }));
   server.get("/healthz", async (_request, reply) => {
     const report = await health.getHealth();
     return reply.code(report.status === "ok" ? 200 : 503).send(report);

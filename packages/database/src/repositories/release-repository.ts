@@ -11,6 +11,7 @@ export interface CreateReleaseInput {
 export interface ReleaseTransitionInput {
   correlationId: string;
   errorCode?: string;
+  expectedAttempt?: number;
   expectedStatus: ReleaseStatus;
   nextStatus: ReleaseStatus;
   reason?: string;
@@ -56,6 +57,7 @@ export class ReleaseRepository {
 
   public listArtifacts(releaseId: string) {
     return this.prisma.evidenceArtifact.findMany({
+      include: { testRun: { select: { attempt: true } } },
       orderBy: { createdAt: "asc" },
       where: { releaseId }
     });
@@ -237,6 +239,9 @@ export class ReleaseRepository {
       if (release.status !== input.expectedStatus) {
         throw new Error("Release status changed before transition could be applied");
       }
+      if (input.expectedAttempt !== undefined && release.attempt !== input.expectedAttempt) {
+        throw new Error("Release attempt changed before transition could be applied");
+      }
 
       assertTransition(input.expectedStatus, input.nextStatus);
 
@@ -247,6 +252,7 @@ export class ReleaseRepository {
         },
         where: {
           id: input.releaseId,
+          attempt: input.expectedAttempt,
           status: input.expectedStatus as DatabaseReleaseStatus,
           version: release.version
         }

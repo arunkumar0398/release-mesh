@@ -11,6 +11,7 @@ export interface ReleaseView {
 }
 
 export interface ReleaseArtifactView {
+  attempt: number | null;
   binaryContent: string | null;
   contentType: string;
   createdAt: string;

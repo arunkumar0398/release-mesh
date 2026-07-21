@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { fetchPricingQuote, type PricingQuote } from "./api.js";
 
 export interface AppProps {
+  candidateVersion?: "v2" | "v2.1";
   pricingBaseUrl?: string;
   productId?: string;
 }
@@ -13,6 +14,7 @@ type CheckoutState =
   | { message: string; status: "error" };
 
 export function App({
+  candidateVersion,
   pricingBaseUrl = "http://127.0.0.1:4100",
   productId = "checkout-demo"
 }: AppProps): React.JSX.Element {
@@ -21,7 +23,7 @@ export function App({
   useEffect(() => {
     let active = true;
 
-    void fetchPricingQuote(pricingBaseUrl, productId).then(
+    void fetchPricingQuote(pricingBaseUrl, productId, candidateVersion).then(
       (quote) => {
         if (active) {
           setState({ quote, status: "ready" });
@@ -40,7 +42,7 @@ export function App({
     return () => {
       active = false;
     };
-  }, [pricingBaseUrl, productId]);
+  }, [candidateVersion, pricingBaseUrl, productId]);
 
   return (
     <main>

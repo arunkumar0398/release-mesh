@@ -10,7 +10,8 @@ function createBrowserFixture(hasAlert: boolean, hasReady = !hasAlert) {
       waitFor: vi.fn().mockResolvedValue(undefined)
     })),
     goto: vi.fn().mockResolvedValue(undefined),
-    screenshot: vi.fn().mockResolvedValue(Buffer.from([137, 80, 78, 71]))
+    screenshot: vi.fn().mockResolvedValue(Buffer.from([137, 80, 78, 71])),
+    url: vi.fn().mockReturnValue("http://checkout.test/?candidateVersion=v2.1")
   };
   const browser = {
     close: vi.fn().mockResolvedValue(undefined),
@@ -35,14 +36,17 @@ describe("createCheckoutBrowserCheck", () => {
       trustedCheckoutOrigins: ["http://checkout.test"]
     });
 
-    await expect(runCheck()).resolves.toEqual({
+    await expect(runCheck("v2.1")).resolves.toEqual({
       passed,
       screenshot: new Uint8Array([137, 80, 78, 71]),
       testId: "browser-checkout"
     });
-    expect(fixture.page.goto).toHaveBeenCalledWith("http://checkout.test/", {
+    expect(fixture.page.goto).toHaveBeenCalledWith(
+      "http://checkout.test/?candidateVersion=v2.1",
+      {
       waitUntil: "networkidle"
-    });
+      }
+    );
     expect(fixture.browser.close).toHaveBeenCalledOnce();
   });
 
@@ -70,7 +74,20 @@ describe("createCheckoutBrowserCheck", () => {
       trustedCheckoutOrigins: ["http://checkout.test"]
     });
 
-    await expect(runCheck()).rejects.toThrow("browser crashed");
+    await expect(runCheck("v2")).rejects.toThrow("browser crashed");
+    expect(fixture.browser.close).toHaveBeenCalledOnce();
+  });
+
+  it("rejects navigation redirected to an untrusted origin", async () => {
+    const fixture = createBrowserFixture(false);
+    fixture.page.url.mockReturnValue("http://169.254.169.254/latest/meta-data");
+    const runCheck = createCheckoutBrowserCheck({
+      browserLauncher: { launch: fixture.launch },
+      checkoutBaseUrl: "http://checkout.test",
+      trustedCheckoutOrigins: ["http://checkout.test"]
+    });
+
+    await expect(runCheck("v2.1")).rejects.toThrow("untrusted origin");
     expect(fixture.browser.close).toHaveBeenCalledOnce();
   });
 
@@ -82,7 +99,7 @@ describe("createCheckoutBrowserCheck", () => {
       trustedCheckoutOrigins: ["http://checkout.test"]
     });
 
-    await expect(runCheck()).rejects.toThrow("Checkout outcome was not rendered");
+    await expect(runCheck("v2")).rejects.toThrow("Checkout outcome was not rendered");
     expect(fixture.browser.close).toHaveBeenCalledOnce();
   });
 });

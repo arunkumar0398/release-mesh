@@ -1,10 +1,12 @@
 import { chromium } from "playwright";
+import type { PricingContractVersion } from "@releasemesh/contracts";
 
 interface BrowserPage {
   getByRole(role: "alert"): { count(): Promise<number> };
   getByText(text: "Pricing available"): { count(): Promise<number> };
   goto(url: string, options: { waitUntil: "networkidle" }): Promise<unknown>;
   screenshot(options: { fullPage: true; type: "png" }): Promise<Buffer>;
+  url(): string;
 }
 
 interface BrowserInstance {
@@ -30,14 +32,25 @@ export function createCheckoutBrowserCheck({
   browserLauncher?: BrowserLauncher;
   checkoutBaseUrl: string;
   trustedCheckoutOrigins: readonly string[];
-}): () => Promise<CheckoutBrowserCheckResult> {
+}): (candidateVersion: PricingContractVersion) => Promise<CheckoutBrowserCheckResult> {
   const checkoutUrl = resolveTrustedCheckoutUrl(checkoutBaseUrl, trustedCheckoutOrigins);
 
-  return async () => {
+  return async (candidateVersion) => {
     const browser = await browserLauncher.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      await page.goto(checkoutUrl, { waitUntil: "networkidle" });
+      const candidateUrl = new URL(checkoutUrl);
+      candidateUrl.searchParams.set("candidateVersion", candidateVersion);
+      await page.goto(candidateUrl.toString(), { waitUntil: "networkidle" });
+      let finalOrigin: string;
+      try {
+        finalOrigin = new URL(page.url()).origin;
+      } catch {
+        throw new Error("Checkout navigation reached an untrusted origin");
+      }
+      if (finalOrigin !== candidateUrl.origin) {
+        throw new Error("Checkout navigation reached an untrusted origin");
+      }
       const hasAlert = (await page.getByRole("alert").count()) > 0;
       const hasReadyState = (await page.getByText("Pricing available").count()) > 0;
       if (hasAlert === hasReadyState) {

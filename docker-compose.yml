@@ -81,7 +81,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/healthz').then(r=>{if(![200,503].includes(r.status))process.exit(1)})"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/livez').then(r=>{if(r.status!==200)process.exit(1)})"]
       interval: 3s
       timeout: 3s
       retries: 30
@@ -100,6 +100,8 @@ services:
       DATABASE_URL: postgresql://releasemesh:releasemesh@postgres:5432/releasemesh
       PRICING_BASE_URL: http://pricing:4100
       REDIS_URL: redis://redis:6379
+      TRUSTED_CHECKOUT_ORIGINS: http://checkout:4173
+      TRUSTED_PRICING_ORIGINS: http://pricing:4100
     depends_on:
       api:
         condition: service_healthy

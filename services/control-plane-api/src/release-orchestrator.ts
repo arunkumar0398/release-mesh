@@ -20,13 +20,22 @@ export interface ReleaseOrchestratorDependencies {
 
 export class ReleaseQueueUnavailableError extends Error {
   public constructor(cause: unknown) {
-    super(
-      cause instanceof Error
-        ? `Release queue unavailable: ${cause.message}`
-        : "Release queue unavailable",
-      { cause }
-    );
+    super("Release queue unavailable", { cause });
     this.name = "ReleaseQueueUnavailableError";
+  }
+}
+
+export class ReleaseNotFoundError extends Error {
+  public constructor(releaseId: string) {
+    super("Release not found", { cause: new Error(`Release not found: ${releaseId}`) });
+    this.name = "ReleaseNotFoundError";
+  }
+}
+
+export class ReleaseRetryConflictError extends Error {
+  public constructor() {
+    super("Only ERROR releases can be retried");
+    this.name = "ReleaseRetryConflictError";
   }
 }
 
@@ -36,6 +45,7 @@ export class ReleaseOrchestrator {
   public async listArtifacts(releaseId: string): Promise<ReleaseArtifactView[]> {
     const artifacts = await this.dependencies.releaseRepository.listArtifacts(releaseId);
     return artifacts.map((artifact) => ({
+      attempt: artifact.testRun?.attempt ?? null,
       binaryContent: artifact.binaryContent
         ? Buffer.from(artifact.binaryContent).toString("base64")
         : null,
@@ -78,7 +88,7 @@ export class ReleaseOrchestrator {
     }
 
     try {
-      await this.dependencies.queue.enqueue(result.release.id);
+      await this.dependencies.queue.enqueue(result.release.id, result.release.attempt);
     } catch (error) {
       await this.dependencies.releaseRepository.transitionRelease({
         correlationId: input.correlationId,
@@ -109,26 +119,31 @@ export class ReleaseOrchestrator {
     correlationId: string;
     releaseId: string;
   }): Promise<ReleaseView> {
-    await this.dependencies.queue.removeTerminalJob(releaseId);
-    const release = await this.dependencies.releaseRepository.retryRelease(releaseId, correlationId);
+    return this.dependencies.queue.withReleaseLock(releaseId, async () => {
+      const current = await this.dependencies.releaseRepository.findReleaseById(releaseId);
+      if (!current) throw new ReleaseNotFoundError(releaseId);
+      if (current.status !== "ERROR") throw new ReleaseRetryConflictError();
+      await this.dependencies.queue.removeTerminalJob(releaseId, current.attempt);
+      const release = await this.dependencies.releaseRepository.retryRelease(releaseId, correlationId);
 
-    try {
-      await this.dependencies.queue.enqueue(releaseId);
-    } catch (error) {
-      await this.dependencies.releaseRepository.transitionRelease({
-        correlationId,
-        errorCode: "QUEUE_ENQUEUE_FAILED",
-        expectedStatus: "QUEUED",
-        nextStatus: "ERROR",
-        reason: error instanceof Error ? error.message : "Queue enqueue failed",
-        releaseId
-      });
-      throw new ReleaseQueueUnavailableError(error);
-    }
+      try {
+        await this.dependencies.queue.enqueue(releaseId, release.attempt);
+      } catch (error) {
+        await this.dependencies.releaseRepository.transitionRelease({
+          correlationId,
+          errorCode: "QUEUE_ENQUEUE_FAILED",
+          expectedStatus: "QUEUED",
+          nextStatus: "ERROR",
+          reason: error instanceof Error ? error.message : "Queue enqueue failed",
+          releaseId
+        });
+        throw new ReleaseQueueUnavailableError(error);
+      }
 
-    const hydrated = await this.dependencies.releaseRepository.findReleaseById(release.id);
-    if (!hydrated) throw new Error(`Release not found: ${release.id}`);
-    return toReleaseView(hydrated);
+      const hydrated = await this.dependencies.releaseRepository.findReleaseById(release.id);
+      if (!hydrated) throw new Error(`Release not found: ${release.id}`);
+      return toReleaseView(hydrated);
+    });
   }
 }
 

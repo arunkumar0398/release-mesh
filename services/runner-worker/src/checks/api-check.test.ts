@@ -45,7 +45,7 @@ describe("createPricingApiCheck", () => {
   it("fails against Pricing v2 when the Checkout fields are absent", async () => {
     const runCheck = createTrustedPricingApiCheck({ pricingBaseUrl: await startPricing("v2") });
 
-    await expect(runCheck()).resolves.toEqual({
+    await expect(runCheck("v2")).resolves.toEqual({
       missingFields: ["price", "currency"],
       outcome: "failed",
       statusCode: 200,
@@ -54,9 +54,9 @@ describe("createPricingApiCheck", () => {
   });
 
   it("passes against Pricing v2.1", async () => {
-    const runCheck = createTrustedPricingApiCheck({ pricingBaseUrl: await startPricing("v2.1") });
+    const runCheck = createTrustedPricingApiCheck({ pricingBaseUrl: await startPricing("v2") });
 
-    await expect(runCheck()).resolves.toEqual({
+    await expect(runCheck("v2.1")).resolves.toEqual({
       missingFields: [],
       outcome: "passed",
       statusCode: 200,
@@ -64,11 +64,20 @@ describe("createPricingApiCheck", () => {
     });
   });
 
+  it("tests v2 even when the fixture default is v2.1", async () => {
+    const runCheck = createTrustedPricingApiCheck({ pricingBaseUrl: await startPricing("v2.1") });
+
+    await expect(runCheck("v2")).resolves.toMatchObject({
+      missingFields: ["price", "currency"],
+      outcome: "failed"
+    });
+  });
+
   it("returns an error when Pricing returns a non-success status", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
     const runCheck = createTrustedPricingApiCheck({ fetchImpl, pricingBaseUrl: "http://pricing.test" });
 
-    await expect(runCheck()).resolves.toEqual({
+    await expect(runCheck("v2")).resolves.toEqual({
       errorCode: "HTTP_ERROR",
       outcome: "error",
       statusCode: 503,
@@ -89,7 +98,7 @@ describe("createPricingApiCheck", () => {
       timeoutMs: 50
     });
 
-    const resultPromise = runCheck();
+    const resultPromise = runCheck("v2");
     await vi.advanceTimersByTimeAsync(50);
 
     await expect(resultPromise).resolves.toEqual({
@@ -99,7 +108,7 @@ describe("createPricingApiCheck", () => {
       testId: "api-pricing"
     });
     expect(fetchImpl).toHaveBeenCalledWith(
-      "http://pricing.test/pricing/checkout-demo",
+      "http://pricing.test/pricing/checkout-demo?candidateVersion=v2",
       expect.objectContaining({ redirect: "error", signal: expect.any(AbortSignal) })
     );
   });
@@ -118,7 +127,7 @@ describe("createPricingApiCheck", () => {
       timeoutMs: 50
     });
 
-    const resultPromise = runCheck();
+    const resultPromise = runCheck("v2");
     await vi.advanceTimersByTimeAsync(50);
 
     await expect(resultPromise).resolves.toEqual({
@@ -133,7 +142,7 @@ describe("createPricingApiCheck", () => {
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new TypeError("fetch failed"));
     const runCheck = createTrustedPricingApiCheck({ fetchImpl, pricingBaseUrl: "http://pricing.test" });
 
-    await expect(runCheck()).resolves.toEqual({
+    await expect(runCheck("v2")).resolves.toEqual({
       errorCode: "NETWORK_ERROR",
       outcome: "error",
       statusCode: null,
@@ -147,7 +156,7 @@ describe("createPricingApiCheck", () => {
       .mockResolvedValue(new Response("not-json", { status: 200 }));
     const runCheck = createTrustedPricingApiCheck({ fetchImpl, pricingBaseUrl: "http://pricing.test" });
 
-    await expect(runCheck()).resolves.toEqual({
+    await expect(runCheck("v2")).resolves.toEqual({
       errorCode: "INVALID_JSON",
       outcome: "error",
       statusCode: 200,
@@ -205,9 +214,12 @@ describe("createPricingApiCheck", () => {
       .mockResolvedValue(new Response(null, { headers: { location: "http://untrusted.test" }, status: 302 }));
     const runCheck = createTrustedPricingApiCheck({ fetchImpl, pricingBaseUrl: "https://pricing.test" });
 
-    await expect(runCheck()).resolves.toMatchObject({ errorCode: "HTTP_ERROR", outcome: "error" });
+    await expect(runCheck("v2")).resolves.toMatchObject({
+      errorCode: "HTTP_ERROR",
+      outcome: "error"
+    });
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://pricing.test/pricing/checkout-demo",
+      "https://pricing.test/pricing/checkout-demo?candidateVersion=v2",
       expect.objectContaining({ redirect: "error" })
     );
   });

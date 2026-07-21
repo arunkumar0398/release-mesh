@@ -11,7 +11,12 @@ import { createReleaseQueue } from "@releasemesh/runner-worker/queue";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { HealthService } from "./health-service.js";
-import { ReleaseOrchestrator, ReleaseQueueUnavailableError } from "./release-orchestrator.js";
+import {
+  ReleaseNotFoundError,
+  ReleaseOrchestrator,
+  ReleaseQueueUnavailableError,
+  ReleaseRetryConflictError
+} from "./release-orchestrator.js";
 import {
   registerComponentRoutes,
   type ComponentRoutesDependencies
@@ -29,22 +34,44 @@ export interface ControlPlaneDependencies {
   releases: ReleaseRoutesDependencies;
 }
 
-export function buildControlPlaneServer(dependencies: ControlPlaneDependencies): FastifyInstance {
-  const server = Fastify({ logger: false });
-  server.setErrorHandler((error, _request, reply) => {
+export function buildControlPlaneServer(
+  dependencies: ControlPlaneDependencies,
+  logger = false
+): FastifyInstance {
+  const server = Fastify({ logger });
+  server.setErrorHandler((error, request, reply) => {
     if (error instanceof IdempotencyConflictError) {
       return reply.code(409).send({ message: error.message });
     }
     if (error instanceof ReleaseQueueUnavailableError) {
+      request.log.error({ correlationId: request.id, error: error.cause }, error.message);
       return reply.code(503).send({ message: error.message });
     }
-    return reply.send(error);
+    if (error instanceof ReleaseNotFoundError) {
+      return reply.code(404).send({ message: error.message });
+    }
+    if (error instanceof ReleaseRetryConflictError) {
+      return reply.code(409).send({ message: error.message });
+    }
+    if (isValidationError(error)) {
+      return reply.code(error.statusCode ?? 400).send({ message: error.message });
+    }
+    request.log.error({ correlationId: request.id, error }, "Unhandled control-plane error");
+    return reply.code(500).send({ message: "Internal server error" });
   });
   registerComponentRoutes(server, dependencies.catalog);
   registerDependencyRoutes(server, dependencies.catalog);
   registerReleaseRoutes(server, dependencies.releases);
   registerHealthRoutes(server, dependencies.health);
   return server;
+}
+
+function isValidationError(
+  error: unknown
+): error is Error & { statusCode?: number; validation: unknown[] } {
+  return error instanceof Error
+    && "validation" in error
+    && Array.isArray((error as { validation?: unknown }).validation);
 }
 
 export async function startControlPlaneServer() {
@@ -75,7 +102,7 @@ export async function startControlPlaneServer() {
     },
     health,
     releases
-  });
+  }, true);
   await server.listen({ host: "0.0.0.0", port });
 
   return {

@@ -57,4 +57,16 @@ describe("Checkout", () => {
       "Pricing response is incompatible: missing price, currency"
     );
   });
+
+  it("binds the Checkout request to the selected bundled candidate", async () => {
+    respondWith({ amount: 1299, currency: "INR", currencyCode: "INR", price: 1299 });
+
+    render(<App candidateVersion="v2.1" pricingBaseUrl="http://pricing.test" />);
+
+    expect(await screen.findByText("INR 1299")).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      "http://pricing.test/pricing/checkout-demo?candidateVersion=v2.1",
+      undefined
+    );
+  });
 });

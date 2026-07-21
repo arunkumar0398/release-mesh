@@ -14,18 +14,24 @@ import { createPricingApiCheck } from "./checks/api-check.js";
 import { createCheckoutBrowserCheck } from "./checks/browser-check.js";
 import { DefaultMandatoryCheckExecutor } from "./mandatory-check-executor.js";
 import type { ReleaseProcessor } from "./release-processor.js";
-import { ReleaseProcessor as DefaultReleaseProcessor } from "./release-processor.js";
+import {
+  ReleaseProcessingError,
+  ReleaseProcessor as DefaultReleaseProcessor
+} from "./release-processor.js";
 import {
   cappedExponentialBackoff,
   recoverStrandedTestingReleases,
+  runRecoveryTasks,
   startWorkerHeartbeat
 } from "./recovery.js";
 import {
   createReleaseQueue,
   reconcileQueuedReleases,
+  startQueuedReleaseReconciler,
   type ReleaseJobData,
   type ReleaseQueue
 } from "./queues/release-queue.js";
+import { parseTrustedOrigins } from "./trusted-origins.js";
 
 export function startReleaseWorker({
   onError = (error: Error) => console.error(error),
@@ -40,7 +46,7 @@ export function startReleaseWorker({
 }): Worker<ReleaseJobData> {
   const worker = new Worker<ReleaseJobData>(
     queue.name,
-    async (job) => processor.process(job.data.releaseId),
+    async (job) => processor.process(job.data.releaseId, job.data.attempt),
     {
       connection: queue.connection,
       settings: {
@@ -55,12 +61,14 @@ export function startReleaseWorker({
   );
 
   worker.on("completed", (job) => {
-    void queue.removeTerminalJob(job.data.releaseId).catch(onError);
+    void queue.removeTerminalJob(job.data.releaseId, job.data.attempt).catch(onError);
   });
   worker.on("failed", (job, error) => {
     if (!job || job.attemptsMade < (job.opts.attempts ?? 1)) return;
-    void persistExhaustedFailure(job, error, releaseRepository)
-      .then(() => queue.removeTerminalJob(job.data.releaseId))
+    void queue.withReleaseLock(job.data.releaseId, async () => {
+      await persistExhaustedFailure(job, error, releaseRepository);
+      await queue.removeTerminalJob(job.data.releaseId, job.data.attempt);
+    })
       .catch(onError);
   });
   worker.on("error", onError);
@@ -75,10 +83,12 @@ async function persistExhaustedFailure(
 ): Promise<void> {
   const release = await releaseRepository.findReleaseById(job.data.releaseId);
   if (!release || !["QUEUED", "TESTING", "ANALYZING"].includes(release.status)) return;
+  if (release.attempt !== job.data.attempt) return;
 
   await releaseRepository.transitionRelease({
     correlationId: `worker-failure:${job.data.releaseId}`,
-    errorCode: "WORKER_CRASHED",
+    errorCode: error instanceof ReleaseProcessingError ? error.code : "WORKER_CRASHED",
+    expectedAttempt: job.data.attempt,
     expectedStatus: release.status as "QUEUED" | "TESTING" | "ANALYZING",
     nextStatus: "ERROR",
     reason: error.message,
@@ -90,39 +100,48 @@ export async function startRunnerRuntime() {
   const redisUrl = requiredEnvironment("REDIS_URL");
   const pricingBaseUrl = requiredEnvironment("PRICING_BASE_URL");
   const checkoutBaseUrl = requiredEnvironment("CHECKOUT_BASE_URL");
+  const trustedCheckoutOrigins = parseTrustedOrigins(requiredEnvironment("TRUSTED_CHECKOUT_ORIGINS"));
+  const trustedPricingOrigins = parseTrustedOrigins(requiredEnvironment("TRUSTED_PRICING_ORIGINS"));
   const prisma = createPrismaClient();
   await prisma.$connect();
   const queue = createReleaseQueue({ redisUrl });
   const releaseRepository = new ReleaseRepository(prisma);
   const heartbeatRepository = new WorkerHeartbeatRepository(prisma);
 
-  await reconcileQueuedReleases({
-    olderThan: new Date(Date.now() - Number.parseInt(process.env.QUEUED_RECONCILE_AGE_MS ?? "30000", 10)),
-    queue,
-    releaseRepository
+  const recoverySweep = startQueuedReleaseReconciler({
+    intervalMs: Number.parseInt(process.env.RECOVERY_SWEEP_INTERVAL_MS ?? "10000", 10),
+    reconcile: async () => {
+      await runRecoveryTasks([
+        () => reconcileQueuedReleases({
+          olderThan: new Date(
+            Date.now() - Number.parseInt(process.env.QUEUED_RECONCILE_AGE_MS ?? "30000", 10)
+          ),
+          queue,
+          releaseRepository
+        }),
+        () => recoverStrandedTestingReleases({
+          olderThan: new Date(
+            Date.now() - Number.parseInt(process.env.TESTING_RECOVERY_AGE_MS ?? "120000", 10)
+          ),
+          queue,
+          releaseRepository
+        })
+      ]);
+    }
   });
-  await recoverStrandedTestingReleases({
-    olderThan: new Date(Date.now() - Number.parseInt(process.env.TESTING_RECOVERY_AGE_MS ?? "120000", 10)),
-    releaseRepository
-  });
+  await recoverySweep.ready;
 
-  const heartbeat = startWorkerHeartbeat({
-    heartbeatRepository,
-    intervalMs: Number.parseInt(process.env.WORKER_HEARTBEAT_INTERVAL_MS ?? "10000", 10),
-    workerId: process.env.WORKER_ID ?? hostname()
-  });
-  await heartbeat.ready;
   const processor = new DefaultReleaseProcessor({
     artifactStore: new PostgresArtifactStore(prisma),
     mandatoryCheckExecutor: new DefaultMandatoryCheckExecutor({
       runBrowserCheck: createCheckoutBrowserCheck({
         checkoutBaseUrl,
-        trustedCheckoutOrigins: [checkoutBaseUrl]
+        trustedCheckoutOrigins
       }),
       runPricingApiCheck: createPricingApiCheck({
         pricingBaseUrl,
         timeoutMs: Number.parseInt(process.env.PRICING_TIMEOUT_MS ?? "5000", 10),
-        trustedPricingOrigins: [pricingBaseUrl]
+        trustedPricingOrigins
       })
     }),
     releaseRepository,
@@ -130,11 +149,18 @@ export async function startRunnerRuntime() {
   });
   const worker = startReleaseWorker({ processor, queue, releaseRepository });
   await worker.waitUntilReady();
+  const heartbeat = startWorkerHeartbeat({
+    heartbeatRepository,
+    intervalMs: Number.parseInt(process.env.WORKER_HEARTBEAT_INTERVAL_MS ?? "10000", 10),
+    workerId: process.env.WORKER_ID ?? hostname()
+  });
+  await heartbeat.ready;
 
   return {
     close: async () => {
       await worker.close();
       await heartbeat.stop();
+      await recoverySweep.stop();
       await queue.close();
       await prisma.$disconnect();
     }

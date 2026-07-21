@@ -9,18 +9,20 @@ describe("DefaultMandatoryCheckExecutor", () => {
   ] as const)(
     "maps trusted %s checks to deterministic evidence",
     async (candidateVersion, status, incompatible, apiOutcome, browserPassed) => {
+      const runBrowserCheck = vi.fn().mockResolvedValue({
+        passed: browserPassed,
+        screenshot: new Uint8Array([137, 80, 78, 71]),
+        testId: "browser-checkout"
+      });
+      const runPricingApiCheck = vi.fn().mockResolvedValue({
+        missingFields: apiOutcome === "passed" ? [] : ["price", "currency"],
+        outcome: apiOutcome,
+        statusCode: 200,
+        testId: "api-pricing"
+      });
       const executor = new DefaultMandatoryCheckExecutor({
-        runBrowserCheck: vi.fn().mockResolvedValue({
-          passed: browserPassed,
-          screenshot: new Uint8Array([137, 80, 78, 71]),
-          testId: "browser-checkout"
-        }),
-        runPricingApiCheck: vi.fn().mockResolvedValue({
-          missingFields: apiOutcome === "passed" ? [] : ["price", "currency"],
-          outcome: apiOutcome,
-          statusCode: 200,
-          testId: "api-pricing"
-        })
+        runBrowserCheck,
+        runPricingApiCheck
       });
 
       await expect(
@@ -43,6 +45,8 @@ describe("DefaultMandatoryCheckExecutor", () => {
           testId: "browser-checkout"
         })
       ]);
+      expect(runPricingApiCheck).toHaveBeenCalledWith(candidateVersion);
+      expect(runBrowserCheck).toHaveBeenCalledWith(candidateVersion);
     }
   );
 

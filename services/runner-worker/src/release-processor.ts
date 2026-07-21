@@ -43,6 +43,7 @@ interface ProcessorReleaseRepository {
   transitionRelease(input: {
     correlationId: string;
     errorCode?: string;
+    expectedAttempt?: number;
     expectedStatus: ReleaseStatus;
     nextStatus: ReleaseStatus;
     reason?: string;
@@ -55,7 +56,15 @@ interface TestRunRepositoryPort {
     status: MandatoryTestStatus | "ERROR";
     testRunId: string;
   }): Promise<void>;
+  loadAttemptSummary(input: { attempt: number; releaseId: string }): Promise<Array<{
+    hasArtifact: boolean;
+    hasIncompatibleRegisteredDependency: boolean;
+    status: MandatoryTestStatus;
+    testId: string;
+  }>>;
+  prepareAttempt(input: { attempt: number; releaseId: string }): Promise<void>;
   start(input: {
+    attempt: number;
     releaseId: string;
     testId: TrustedTestId;
   }): Promise<{ id: string }>;
@@ -75,13 +84,31 @@ class ArtifactStorageError extends Error {
   }
 }
 
+export class ReleaseProcessingError extends Error {
+  public constructor(
+    public readonly code: "ARTIFACT_STORAGE_FAILED" | "CHECK_EXECUTION_FAILED",
+    cause: unknown
+  ) {
+    super(cause instanceof Error ? cause.message : "Release processing failed", { cause });
+    this.name = "ReleaseProcessingError";
+  }
+}
+
 export class ReleaseProcessor {
   public constructor(private readonly dependencies: ReleaseProcessorDependencies) {}
 
-  public async process(releaseId: string): Promise<{ gate: DeterministicReleaseGate }> {
+  public async process(
+    releaseId: string,
+    expectedAttempt: number
+  ): Promise<{ gate: DeterministicReleaseGate }> {
     const release = await this.dependencies.releaseRepository.findReleaseById(releaseId);
     if (!release) throw new Error(`Release not found: ${releaseId}`);
-    if (release.status !== "QUEUED") throw new Error(`Release is not QUEUED: ${releaseId}`);
+    if (release.attempt !== expectedAttempt) {
+      throw new Error(`Release attempt does not match queue job: ${releaseId}`);
+    }
+    if (!(["QUEUED", "TESTING", "ANALYZING"] as string[]).includes(release.status)) {
+      throw new Error(`Release is not QUEUED, TESTING, or ANALYZING: ${releaseId}`);
+    }
     if (
       release.componentVersion.component.name !== "pricing" ||
       (release.componentVersion.version !== "v2" && release.componentVersion.version !== "v2.1")
@@ -90,32 +117,36 @@ export class ReleaseProcessor {
     }
 
     const correlationId = `worker:${releaseId}:attempt:${release.attempt}`;
-    await this.dependencies.releaseRepository.transitionRelease({
-      correlationId,
-      expectedStatus: "QUEUED",
-      nextStatus: "TESTING",
-      releaseId
-    });
-
-    let currentStatus: "TESTING" | "ANALYZING" = "TESTING";
-    try {
-      const results = await this.dependencies.mandatoryCheckExecutor.runMandatoryChecks({
-        candidateVersion: release.componentVersion.version,
-        releaseId
-      });
-      await this.persistEvidence(releaseId, results);
-
+    if (release.status === "QUEUED") {
       await this.dependencies.releaseRepository.transitionRelease({
         correlationId,
-        expectedStatus: "TESTING",
-        nextStatus: "ANALYZING",
+        expectedAttempt: release.attempt,
+        expectedStatus: "QUEUED",
+        nextStatus: "TESTING",
         releaseId
       });
-      currentStatus = "ANALYZING";
+    }
 
+    try {
+      const results = release.status === "ANALYZING"
+        ? await this.dependencies.testRunRepository.loadAttemptSummary({
+            attempt: release.attempt,
+            releaseId
+          })
+        : await this.runAndPersistChecks(releaseId, release.attempt, release.componentVersion.version);
+
+      if (release.status !== "ANALYZING") {
+        await this.dependencies.releaseRepository.transitionRelease({
+          correlationId,
+          expectedAttempt: release.attempt,
+          expectedStatus: "TESTING",
+          nextStatus: "ANALYZING",
+          releaseId
+        });
+      }
       const expectedMandatoryTestIds = Object.keys(trustedTestRegistry) as TrustedTestId[];
       const gate = decideReleaseGate({
-        evidenceComplete: results.every((result) => result.artifact !== undefined),
+        evidenceComplete: results.every((result) => result.hasArtifact),
         expectedMandatoryTestIds,
         hasIncompatibleRegisteredDependency: results.some(
           (result) => result.hasIncompatibleRegisteredDependency
@@ -126,6 +157,7 @@ export class ReleaseProcessor {
 
       await this.dependencies.releaseRepository.transitionRelease({
         correlationId,
+        expectedAttempt: release.attempt,
         expectedStatus: "ANALYZING",
         nextStatus: gate,
         releaseId
@@ -135,21 +167,37 @@ export class ReleaseProcessor {
       const errorCode = error instanceof ArtifactStorageError
         ? "ARTIFACT_STORAGE_FAILED"
         : "CHECK_EXECUTION_FAILED";
-      await this.dependencies.releaseRepository.transitionRelease({
-        correlationId,
-        errorCode,
-        expectedStatus: currentStatus,
-        nextStatus: "ERROR",
-        reason: error instanceof Error ? error.message : "Release processing failed",
-        releaseId
-      });
-      return { gate: "ERROR" };
+      throw new ReleaseProcessingError(errorCode, error);
     }
   }
 
-  private async persistEvidence(releaseId: string, results: TrustedCheckResult[]): Promise<void> {
+  private async runAndPersistChecks(
+    releaseId: string,
+    attempt: number,
+    candidateVersion: PricingContractVersion
+  ) {
+    await this.dependencies.testRunRepository.prepareAttempt({ attempt, releaseId });
+    const results = await this.dependencies.mandatoryCheckExecutor.runMandatoryChecks({
+      candidateVersion,
+      releaseId
+    });
+    await this.persistEvidence(releaseId, attempt, results);
+    return results.map((result) => ({
+      hasArtifact: result.artifact !== undefined,
+      hasIncompatibleRegisteredDependency: result.hasIncompatibleRegisteredDependency,
+      status: result.status,
+      testId: result.testId
+    }));
+  }
+
+  private async persistEvidence(
+    releaseId: string,
+    attempt: number,
+    results: TrustedCheckResult[]
+  ): Promise<void> {
     for (const result of results) {
       const testRun = await this.dependencies.testRunRepository.start({
+        attempt,
         releaseId,
         testId: result.testId
       });

@@ -5,11 +5,16 @@ export interface PricingQuote {
 
 export async function fetchPricingQuote(
   pricingBaseUrl: string,
-  productId: string
+  productId: string,
+  candidateVersion?: "v2" | "v2.1"
 ): Promise<PricingQuote> {
-  const response = await fetch(
+  const pricingUrl = new URL(
     `${pricingBaseUrl.replace(/\/$/, "")}/pricing/${encodeURIComponent(productId)}`
   );
+  if (candidateVersion) {
+    pricingUrl.searchParams.set("candidateVersion", candidateVersion);
+  }
+  const response = await fetch(pricingUrl.toString(), undefined);
 
   if (!response.ok) {
     throw new Error(`Pricing request failed with status ${response.status}`);

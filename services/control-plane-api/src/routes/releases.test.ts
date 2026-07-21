@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IdempotencyConflictError } from "@releasemesh/database";
 
-import { ReleaseQueueUnavailableError } from "../release-orchestrator.js";
+import {
+  ReleaseNotFoundError,
+  ReleaseQueueUnavailableError,
+  ReleaseRetryConflictError
+} from "../release-orchestrator.js";
 import { buildControlPlaneServer, type ControlPlaneDependencies } from "../server.js";
 
 const release = {
@@ -29,6 +33,7 @@ function createDependencies(): ControlPlaneDependencies {
     releases: {
       getRelease: vi.fn().mockResolvedValue(release),
       listArtifacts: vi.fn().mockResolvedValue([{
+        attempt: 1,
         binaryContent: null,
         contentType: "application/json",
         createdAt: "2026-07-21T10:00:00.000Z",
@@ -128,9 +133,9 @@ describe("release routes", () => {
   });
 
   it.each([
-    [new IdempotencyConflictError(), 409],
-    [new ReleaseQueueUnavailableError(new Error("Redis unavailable")), 503]
-  ])("maps known creation failure to HTTP %s", async (failure, expectedStatus) => {
+    [new IdempotencyConflictError(), 409, "Idempotency key was already used for a different release payload"],
+    [new ReleaseQueueUnavailableError(new Error("redis://user:secret@host")), 503, "Release queue unavailable"]
+  ])("maps known creation failure to HTTP %s", async (failure, expectedStatus, expectedMessage) => {
     const dependencies = createDependencies();
     vi.mocked(dependencies.releases.submitRelease).mockRejectedValue(failure);
     const server = buildControlPlaneServer(dependencies);
@@ -144,6 +149,43 @@ describe("release routes", () => {
     });
 
     expect(response.statusCode).toBe(expectedStatus);
+    expect(response.json()).toEqual({ message: expectedMessage });
+    expect(response.body).not.toContain("secret");
+  });
+
+  it("returns a stable generic response for unexpected failures", async () => {
+    const dependencies = createDependencies();
+    vi.mocked(dependencies.releases.submitRelease).mockRejectedValue(
+      new Error("postgresql://user:secret@database/internal")
+    );
+    const server = buildControlPlaneServer(dependencies);
+    servers.push(server);
+
+    const response = await server.inject({
+      headers: { "idempotency-key": "unexpected-failure" },
+      method: "POST",
+      payload: { candidateVersion: "v2" },
+      url: "/releases"
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ message: "Internal server error" });
+    expect(response.body).not.toContain("secret");
+  });
+
+  it.each([
+    [new ReleaseNotFoundError("missing"), 404, "Release not found"],
+    [new ReleaseRetryConflictError(), 409, "Only ERROR releases can be retried"]
+  ])("maps known retry failures without leaking internals", async (failure, statusCode, message) => {
+    const dependencies = createDependencies();
+    vi.mocked(dependencies.releases.retryRelease).mockRejectedValue(failure);
+    const server = buildControlPlaneServer(dependencies);
+    servers.push(server);
+
+    const response = await server.inject({ method: "POST", url: "/releases/missing/retry" });
+
+    expect(response.statusCode).toBe(statusCode);
+    expect(response.json()).toEqual({ message });
   });
 
   it("returns releases and retries through the orchestration boundary", async () => {
@@ -175,7 +217,7 @@ describe("release routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([
-      expect.objectContaining({ id: "artifact-1", kind: "CONTRACT_DIFF" })
+      expect.objectContaining({ attempt: 1, id: "artifact-1", kind: "CONTRACT_DIFF" })
     ]);
     expect(dependencies.releases.listArtifacts).toHaveBeenCalledWith("release-123");
   });
@@ -187,11 +229,12 @@ describe("catalogue and health routes", () => {
     const server = buildControlPlaneServer(dependencies);
     servers.push(server);
 
-    const [components, component, dependenciesResponse, health] = await Promise.all([
+    const [components, component, dependenciesResponse, health, live] = await Promise.all([
       server.inject({ method: "GET", url: "/components" }),
       server.inject({ method: "GET", url: "/components/pricing" }),
       server.inject({ method: "GET", url: "/dependencies" }),
-      server.inject({ method: "GET", url: "/healthz" })
+      server.inject({ method: "GET", url: "/healthz" }),
+      server.inject({ method: "GET", url: "/livez" })
     ]);
 
     expect(components.statusCode).toBe(200);
@@ -205,5 +248,7 @@ describe("catalogue and health routes", () => {
       status: "ok",
       worker: { fresh: true }
     });
+    expect(live.statusCode).toBe(200);
+    expect(live.json()).toEqual({ status: "ok" });
   });
 });

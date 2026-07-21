@@ -1,11 +1,12 @@
 import type { PricingApiCheckResult } from "./checks/api-check.js";
 import type { CheckoutBrowserCheckResult } from "./checks/browser-check.js";
+import type { PricingContractVersion } from "@releasemesh/contracts";
 import { runPricingContractCheck } from "./checks/contract-check.js";
 import type { MandatoryCheckExecutor, TrustedCheckResult } from "./release-processor.js";
 
 export interface DefaultMandatoryCheckExecutorDependencies {
-  runBrowserCheck(): Promise<CheckoutBrowserCheckResult>;
-  runPricingApiCheck(): Promise<PricingApiCheckResult>;
+  runBrowserCheck(candidateVersion: PricingContractVersion): Promise<CheckoutBrowserCheckResult>;
+  runPricingApiCheck(candidateVersion: PricingContractVersion): Promise<PricingApiCheckResult>;
 }
 
 export class DefaultMandatoryCheckExecutor implements MandatoryCheckExecutor {
@@ -15,11 +16,11 @@ export class DefaultMandatoryCheckExecutor implements MandatoryCheckExecutor {
     input: Parameters<MandatoryCheckExecutor["runMandatoryChecks"]>[0]
   ): Promise<TrustedCheckResult[]> {
     const contract = runPricingContractCheck(input.candidateVersion);
-    const api = await this.dependencies.runPricingApiCheck();
+    const api = await this.dependencies.runPricingApiCheck(input.candidateVersion);
     if (api.outcome === "error") {
       throw new Error(`Pricing check failed: ${api.errorCode}`);
     }
-    const browser = await this.dependencies.runBrowserCheck();
+    const browser = await this.dependencies.runBrowserCheck(input.candidateVersion);
 
     return [
       {

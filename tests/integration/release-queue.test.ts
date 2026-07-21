@@ -132,7 +132,7 @@ describe("release queue orchestration", () => {
         correlationId: "enqueue-interrupted",
         idempotencyKey: "enqueue-interrupted"
       })
-    ).rejects.toThrow("Redis unavailable");
+    ).rejects.toThrow("Release queue unavailable");
 
     const release = await prisma.releaseCandidate.findUniqueOrThrow({
       where: { idempotencyKey: "enqueue-interrupted" }
@@ -172,7 +172,10 @@ describe("release queue orchestration", () => {
     expect(first.created).toBe(true);
     expect(duplicate).toEqual({ created: false, release: first.release });
     await expect(prisma.releaseCandidate.count()).resolves.toBe(1);
-    await expect(queue.getJob(first.release.id)).resolves.toMatchObject({ id: first.release.id });
+    await expect(queue.getJob(first.release.id)).resolves.toMatchObject({
+      data: { attempt: 0, releaseId: first.release.id },
+      id: first.release.id
+    });
   });
 
   it("re-enqueues a missing job for an old QUEUED release", async () => {
@@ -217,12 +220,18 @@ describe("release queue orchestration", () => {
     await createPricingCandidates();
     const events: string[] = [];
     const queue: ReleaseQueuePort = {
-      enqueue: vi.fn(async () => {
-        events.push("enqueue");
+      enqueue: vi.fn(async (_releaseId, attempt) => {
+        events.push(`enqueue:${attempt}`);
       }),
       getJob: vi.fn(),
-      removeTerminalJob: vi.fn(async () => {
-        events.push("remove");
+      removeTerminalJob: vi.fn(async (_releaseId, attempt) => {
+        events.push(`remove:${attempt}`);
+      }),
+      withReleaseLock: vi.fn(async (_releaseId, operation) => {
+        events.push("lock:start");
+        const result = await operation();
+        events.push("lock:end");
+        return result;
       })
     };
     const orchestrator = createOrchestrator(queue);
@@ -239,8 +248,97 @@ describe("release queue orchestration", () => {
       releaseId: failed.id
     });
 
-    expect(events).toEqual(["remove", "enqueue"]);
+    expect(events).toEqual(["lock:start", "remove:0", "enqueue:1", "lock:end"]);
     expect(retried.status).toBe("QUEUED");
+  });
+
+  it("replaces a retained terminal job for an old QUEUED release", async () => {
+    await createPricingCandidates();
+    const releaseRepository = new ReleaseRepository(prisma);
+    const componentVersion = await prisma.componentVersion.findFirstOrThrow({
+      where: { version: "v2" }
+    });
+    const created = await releaseRepository.createQueuedRelease({
+      componentVersionId: componentVersion.id,
+      correlationId: "reconcile-terminal",
+      idempotencyKey: "reconcile-terminal"
+    });
+    await prisma.releaseCandidate.update({
+      data: { updatedAt: new Date(Date.now() - 60_000) },
+      where: { id: created.release.id }
+    });
+    const queue = createReleaseQueue({ queueName: `release-terminal-${randomUUID()}`, redisUrl });
+    queues.push(queue);
+    const staleWorker = new Worker(queue.name, async () => undefined, {
+      connection: queue.connection
+    });
+    await queue.enqueue(created.release.id, created.release.attempt);
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (await (await queue.getJob(created.release.id))?.getState() === "completed") break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    }
+    await staleWorker.close();
+
+    await expect(
+      reconcileQueuedReleases({
+        olderThan: new Date(Date.now() - 30_000),
+        queue,
+        releaseRepository
+      })
+    ).resolves.toEqual([created.release.id]);
+    await expect(queue.getJob(created.release.id)).resolves.toMatchObject({
+      data: { attempt: created.release.attempt }
+    });
+  });
+
+  it("does not let stale cleanup remove a replacement-attempt job", async () => {
+    const queue = createReleaseQueue({ queueName: `release-fence-${randomUUID()}`, redisUrl });
+    queues.push(queue);
+    await queue.enqueue("release-fenced", 1);
+
+    await queue.removeTerminalJob("release-fenced", 0);
+
+    await expect(queue.getJob("release-fenced")).resolves.toMatchObject({
+      data: { attempt: 1, releaseId: "release-fenced" }
+    });
+  });
+
+  it("serializes cleanup and replacement enqueue for the same release", async () => {
+    const queue = createReleaseQueue({
+      lockLeaseMs: 100,
+      queueName: `release-lock-${randomUUID()}`,
+      redisUrl
+    });
+    queues.push(queue);
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = queue.withReleaseLock("release-locked", async () => {
+      events.push("first:start");
+      await firstGate;
+      events.push("first:end");
+    });
+    while (!events.includes("first:start")) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    const client = await queue.raw.client;
+    const initialLease = await client.pttl(queue.raw.toKey("release-lock:release-locked"));
+    expect(initialLease).toBeGreaterThan(0);
+    expect(initialLease).toBeLessThanOrEqual(100);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    const second = queue.withReleaseLock("release-locked", async () => {
+      events.push("second");
+    });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+
+    expect(events).toEqual(["first:start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first:start", "first:end", "second"]);
   });
 
   it("retries ERROR through QUEUED and TESTING to a durable terminal state", async () => {
