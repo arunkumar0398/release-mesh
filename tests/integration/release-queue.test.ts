@@ -10,7 +10,10 @@ import { PrismaClient, ReleaseStatus } from "../../packages/database/src/generat
 import { PostgresArtifactStore } from "../../packages/database/src/artifacts/postgres-artifact-store.js";
 import { CatalogRepository } from "../../packages/database/src/repositories/catalog-repository.js";
 import { ReleaseRepository } from "../../packages/database/src/repositories/release-repository.js";
+import { RiskAssessmentRepository } from "../../packages/database/src/repositories/risk-assessment-repository.js";
 import { TestRunRepository } from "../../packages/database/src/repositories/test-run-repository.js";
+import { analyzeRisk } from "../../packages/risk-engine/src/analyze-risk.js";
+import { planReleaseTests } from "../../packages/risk-engine/src/plan-release-tests.js";
 import { ReleaseOrchestrator } from "../../services/control-plane-api/src/release-orchestrator.js";
 import { createPricingApiCheck } from "../../services/runner-worker/src/checks/api-check.js";
 import { createCheckoutBrowserCheck } from "../../services/runner-worker/src/checks/browser-check.js";
@@ -117,6 +120,23 @@ function createOrchestrator(queue: ReleaseQueuePort): ReleaseOrchestrator {
   });
 }
 
+function createRiskDependencies() {
+  return {
+    riskAnalyzer: {
+      analyze: (evidence: Parameters<typeof analyzeRisk>[0]["evidence"]) => analyzeRisk({
+        client: null,
+        evidence
+      })
+    },
+    riskAssessmentRepository: new RiskAssessmentRepository(prisma),
+    riskPlanner: {
+      plan: async (input: Parameters<typeof planReleaseTests>[0]["input"]) => (
+        await planReleaseTests({ client: null, input })
+      ).selectedTestIds
+    }
+  };
+}
+
 describe("release queue orchestration", () => {
   it("moves a release to ERROR when enqueue is interrupted after QUEUED", async () => {
     await createPricingCandidates();
@@ -153,6 +173,15 @@ describe("release queue orchestration", () => {
         toStatus: "ERROR"
       })
     ]);
+    await expect(prisma.riskAssessment.findUnique({
+      where: { releaseId: release.id }
+    })).resolves.toMatchObject({
+      assessment: expect.objectContaining({
+        rootCause: expect.stringContaining("deterministic ERROR"),
+        source: "deterministic/rule-based"
+      }),
+      status: "AI_UNAVAILABLE"
+    });
   });
 
   it("reuses one database row and one releaseId job for duplicate requests", async () => {
@@ -391,6 +420,7 @@ describe("release queue orchestration", () => {
         })
       }),
       releaseRepository,
+      ...createRiskDependencies(),
       testRunRepository: new TestRunRepository(prisma)
     });
     const worker = startReleaseWorker({ processor, queue, releaseRepository });
@@ -445,6 +475,7 @@ describe("release queue orchestration", () => {
           })
         }),
         releaseRepository: new ReleaseRepository(prisma),
+        ...createRiskDependencies(),
         testRunRepository: new TestRunRepository(prisma)
       });
       const worker = startReleaseWorker({ processor, queue, releaseRepository: new ReleaseRepository(prisma) });

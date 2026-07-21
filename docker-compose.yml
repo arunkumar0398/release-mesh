@@ -98,6 +98,9 @@ services:
     environment:
       CHECKOUT_BASE_URL: http://checkout:4173
       DATABASE_URL: postgresql://releasemesh:releasemesh@postgres:5432/releasemesh
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6}
+      OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-8000}
       PRICING_BASE_URL: http://pricing:4100
       REDIS_URL: redis://redis:6379
       TRUSTED_CHECKOUT_ORIGINS: http://checkout:4173

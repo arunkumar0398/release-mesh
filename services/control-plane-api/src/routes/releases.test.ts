@@ -17,6 +17,19 @@ const release = {
 
 const releaseDetails = {
   ...release,
+  riskAssessment: {
+    assessment: {
+      blastRadius: ["checkout"],
+      compatibleRemediation: "Add compatibility aliases.",
+      confidence: "HIGH",
+      evidenceLinks: [],
+      rootCause: "Pricing fields changed.",
+      source: "GPT-5.6",
+      uncertainty: "Registered consumers only.",
+      verificationSteps: ["Run mandatory tests."]
+    },
+    status: "AVAILABLE"
+  },
   testRuns: [{
     attempt: 0,
     endedAt: "2026-07-21T10:00:02.000Z",

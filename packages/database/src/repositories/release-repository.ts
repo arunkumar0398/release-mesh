@@ -18,6 +18,15 @@ export interface ReleaseTransitionInput {
   releaseId: string;
 }
 
+export interface FailReleaseInput {
+  assessment: Record<string, unknown>;
+  correlationId: string;
+  errorCode: string;
+  expectedAttempt: number;
+  expectedStatus: Extract<ReleaseStatus, "ANALYZING" | "QUEUED" | "TESTING">;
+  releaseId: string;
+}
+
 export class IdempotencyConflictError extends Error {
   public constructor() {
     super("Idempotency key was already used for a different release payload");
@@ -59,6 +68,7 @@ export class ReleaseRepository {
     return this.prisma.releaseCandidate.findUnique({
       include: {
         componentVersion: { include: { component: true } },
+        riskAssessment: true,
         testRuns: { orderBy: [{ attempt: "asc" }, { startedAt: "asc" }] },
         transitions: { orderBy: { createdAt: "asc" } }
       },
@@ -225,6 +235,8 @@ export class ReleaseRepository {
         throw new Error("Release status changed before retry could be applied");
       }
 
+      await transaction.riskAssessment.deleteMany({ where: { releaseId } });
+
       await transaction.releaseTransition.create({
         data: {
           attempt: nextAttempt,
@@ -236,6 +248,68 @@ export class ReleaseRepository {
       });
 
       return transaction.releaseCandidate.findUniqueOrThrow({ where: { id: releaseId } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  public async failRelease(input: FailReleaseInput) {
+    return this.prisma.$transaction(async (transaction) => {
+      const release = await transaction.releaseCandidate.findUnique({
+        where: { id: input.releaseId }
+      });
+
+      if (!release) {
+        throw new Error(`Release not found: ${input.releaseId}`);
+      }
+      if (release.status !== input.expectedStatus) {
+        throw new Error("Release status changed before failure could be applied");
+      }
+      if (release.attempt !== input.expectedAttempt) {
+        throw new Error("Release attempt changed before failure could be applied");
+      }
+
+      assertTransition(input.expectedStatus, "ERROR");
+      const update = await transaction.releaseCandidate.updateMany({
+        data: {
+          status: DatabaseReleaseStatus.ERROR,
+          version: { increment: 1 }
+        },
+        where: {
+          attempt: input.expectedAttempt,
+          id: input.releaseId,
+          status: input.expectedStatus as DatabaseReleaseStatus,
+          version: release.version
+        }
+      });
+
+      if (update.count !== 1) {
+        throw new Error("Release status changed before failure could be applied");
+      }
+
+      await transaction.riskAssessment.upsert({
+        create: {
+          assessment: input.assessment as Prisma.InputJsonObject,
+          releaseId: input.releaseId,
+          status: "AI_UNAVAILABLE"
+        },
+        update: {
+          assessment: input.assessment as Prisma.InputJsonObject,
+          status: "AI_UNAVAILABLE"
+        },
+        where: { releaseId: input.releaseId }
+      });
+      await transaction.releaseTransition.create({
+        data: {
+          attempt: release.attempt,
+          correlationId: input.correlationId,
+          errorCode: input.errorCode,
+          fromStatus: input.expectedStatus as DatabaseReleaseStatus,
+          reason: `Release processing exhausted retries (${input.errorCode})`,
+          releaseId: input.releaseId,
+          toStatus: DatabaseReleaseStatus.ERROR
+        }
+      });
+
+      return transaction.releaseCandidate.findUniqueOrThrow({ where: { id: input.releaseId } });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 

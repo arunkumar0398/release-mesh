@@ -15,6 +15,7 @@ import {
   readPendingSubmissionKey,
   writePendingSubmissionKey
 } from "./idempotency.js";
+import { RiskAssessment } from "./RiskAssessment.js";
 import "./styles.css";
 
 export const releaseMfeVersion = "0.1.0";
@@ -297,6 +298,9 @@ function ReleaseInspection({
       ) : null}
       {state.details ? <Lifecycle transitions={state.details.transitions} /> : null}
       {state.details ? <TestRuns testRuns={state.details.testRuns} /> : null}
+      {terminal && state.details?.riskAssessment ? (
+        <RiskAssessment value={state.details.riskAssessment} />
+      ) : null}
       {terminal ? (
         <Evidence
           artifacts={state.artifacts}
@@ -369,7 +373,7 @@ function Evidence({
       {artifacts.length > 0 ? (
         <div className="evidence-grid">
           {artifacts.map((artifact) => (
-            <article key={artifact.id}>
+            <article id={`artifact-${artifact.id}`} key={artifact.id}>
               <h3>{artifact.kind}</h3>
               <p>{`${artifact.contentType} · ${artifact.sizeBytes} bytes`}</p>
               {artifact.jsonContent !== null ? <pre>{JSON.stringify(artifact.jsonContent, null, 2)}</pre> : null}

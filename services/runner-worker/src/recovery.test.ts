@@ -24,8 +24,11 @@ describe("cappedExponentialBackoff", () => {
 describe("recoverStrandedTestingReleases", () => {
   it("transactionally moves every stranded TESTING release to ERROR", async () => {
     const releaseRepository = {
-      findTestingBefore: vi.fn().mockResolvedValue([{ id: "release-a" }, { id: "release-b" }]),
-      transitionRelease: vi.fn().mockResolvedValue(undefined)
+      failRelease: vi.fn().mockResolvedValue(undefined),
+      findTestingBefore: vi.fn().mockResolvedValue([
+        { attempt: 0, id: "release-a" },
+        { attempt: 1, id: "release-b" }
+      ])
     };
     const olderThan = new Date("2026-07-21T08:00:00.000Z");
 
@@ -33,13 +36,14 @@ describe("recoverStrandedTestingReleases", () => {
       recoverStrandedTestingReleases({ olderThan, releaseRepository })
     ).resolves.toEqual(["release-a", "release-b"]);
 
-    expect(releaseRepository.transitionRelease).toHaveBeenCalledTimes(2);
-    expect(releaseRepository.transitionRelease).toHaveBeenNthCalledWith(
+    expect(releaseRepository.failRelease).toHaveBeenCalledTimes(2);
+    expect(releaseRepository.failRelease).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
+        assessment: expect.objectContaining({ source: "deterministic/rule-based" }),
         errorCode: "WORKER_STALLED",
+        expectedAttempt: 0,
         expectedStatus: "TESTING",
-        nextStatus: "ERROR",
         releaseId: "release-a"
       })
     );
@@ -47,8 +51,8 @@ describe("recoverStrandedTestingReleases", () => {
 
   it("does not recover a TESTING release whose BullMQ job is active", async () => {
     const releaseRepository = {
+      failRelease: vi.fn().mockResolvedValue(undefined),
       findTestingBefore: vi.fn().mockResolvedValue([{ attempt: 2, id: "release-active" }]),
-      transitionRelease: vi.fn().mockResolvedValue(undefined)
     };
     const queue = {
       getJob: vi.fn().mockResolvedValue({
@@ -64,19 +68,19 @@ describe("recoverStrandedTestingReleases", () => {
         releaseRepository
       })
     ).resolves.toEqual([]);
-    expect(releaseRepository.transitionRelease).not.toHaveBeenCalled();
+    expect(releaseRepository.failRelease).not.toHaveBeenCalled();
   });
 
   it("continues recovering after one TESTING release fails", async () => {
     const onError = vi.fn();
     const releaseRepository = {
+      failRelease: vi.fn(async ({ releaseId }: { releaseId: string }) => {
+        if (releaseId === "poisoned") throw new Error("poisoned recovery");
+      }),
       findTestingBefore: vi.fn().mockResolvedValue([
         { attempt: 0, id: "poisoned" },
         { attempt: 1, id: "healthy" }
-      ]),
-      transitionRelease: vi.fn(async ({ releaseId }: { releaseId: string }) => {
-        if (releaseId === "poisoned") throw new Error("poisoned recovery");
-      })
+      ])
     };
 
     await expect(recoverStrandedTestingReleases({

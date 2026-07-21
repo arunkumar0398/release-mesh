@@ -50,12 +50,16 @@ function createDependencies({
   candidateVersion = "v2",
   executor = { runMandatoryChecks: vi.fn().mockResolvedValue(checkResults(candidateVersion)) },
   artifactStore,
-  initialStatus = "QUEUED"
+  initialStatus = "QUEUED",
+  riskAnalyzer,
+  riskPlanner
 }: {
   artifactStore?: ArtifactStore;
   candidateVersion?: "v2" | "v2.1";
   executor?: MandatoryCheckExecutor;
   initialStatus?: "ANALYZING" | "QUEUED" | "TESTING";
+  riskAnalyzer?: ReleaseProcessorDependencies["riskAnalyzer"];
+  riskPlanner?: ReleaseProcessorDependencies["riskPlanner"];
 } = {}): ReleaseProcessorDependencies & { events: string[] } {
   const events: string[] = [];
   let status = initialStatus;
@@ -82,7 +86,7 @@ function createDependencies({
       findReleaseById: vi.fn(async () => ({
         attempt: 0,
         componentVersion: {
-          component: { name: "pricing" },
+          component: { name: "pricing", ownerTeam: "pricing-platform" },
           version: candidateVersion
         },
         id: releaseId,
@@ -93,6 +97,65 @@ function createDependencies({
         events.push(`transition:${expectedStatus}->${nextStatus}`);
         status = nextStatus;
         return { id: releaseId, status };
+      })
+    },
+    riskAnalyzer: riskAnalyzer ?? {
+      analyze: vi.fn(async ({ deterministicGate }) => {
+        events.push(`risk:analyze:${deterministicGate}`);
+        return {
+          assessment: {
+            blastRadius: ["checkout owned by checkout-platform"],
+            compatibleRemediation: "Add compatibility aliases.",
+            confidence: "HIGH" as const,
+            evidenceLinks: [],
+            rootCause: `Deterministic gate ${deterministicGate}.`,
+            uncertainty: "deterministic/rule-based",
+            verificationSteps: ["Run all mandatory tests."]
+          },
+          source: "deterministic/rule-based" as const,
+          status: "AI_UNAVAILABLE" as const
+        };
+      })
+    },
+    riskPlanner: riskPlanner ?? {
+      plan: vi.fn().mockResolvedValue([
+        "contract-pricing",
+        "api-pricing",
+        "browser-checkout"
+      ])
+    },
+    riskAssessmentRepository: {
+      loadEvidence: vi.fn().mockResolvedValue([
+        {
+          contentType: "application/json",
+          id: "artifact-CONTRACT_DIFF",
+          jsonContent: { compatible: candidateVersion === "v2.1" },
+          kind: "CONTRACT_DIFF",
+          sizeBytes: 20,
+          testRun: { status: candidateVersion === "v2.1" ? "PASSED" : "FAILED", testId: "contract-pricing" },
+          textContent: null
+        },
+        {
+          contentType: "text/plain",
+          id: "artifact-SANITIZED_LOG",
+          jsonContent: null,
+          kind: "SANITIZED_LOG",
+          sizeBytes: 20,
+          testRun: { status: candidateVersion === "v2.1" ? "PASSED" : "FAILED", testId: "api-pricing" },
+          textContent: JSON.stringify({ outcome: candidateVersion === "v2.1" ? "passed" : "failed" })
+        },
+        {
+          contentType: "image/png",
+          id: "artifact-SCREENSHOT",
+          jsonContent: null,
+          kind: "SCREENSHOT",
+          sizeBytes: 4,
+          testRun: { status: candidateVersion === "v2.1" ? "PASSED" : "FAILED", testId: "browser-checkout" },
+          textContent: null
+        }
+      ]),
+      upsert: vi.fn(async ({ status: assessmentStatus }) => {
+        events.push(`risk:${assessmentStatus}`);
       })
     },
     testRunRepository: {
@@ -129,7 +192,23 @@ describe("ReleaseProcessor", () => {
 
     expect(dependencies.mandatoryCheckExecutor.runMandatoryChecks).toHaveBeenCalledWith({
       candidateVersion,
-      releaseId
+      releaseId,
+      selectedTestIds: ["contract-pricing", "api-pricing", "browser-checkout"]
+    });
+    expect(dependencies.riskPlanner.plan).toHaveBeenCalledWith({
+      changedEndpoints: [{ method: "GET", path: "/pricing/:productId" }],
+      contractDiff: expect.objectContaining({ compatible: candidateVersion === "v2.1" }),
+      dependencyGraph: [{
+        consumer: "checkout",
+        expectedContractVersion: "v1",
+        provider: "pricing",
+        requiredEndpoints: ["GET /pricing/:productId"]
+      }],
+      trustedTests: [
+        { id: "contract-pricing", mandatory: true, type: "contract" },
+        { id: "api-pricing", mandatory: true, type: "api" },
+        { id: "browser-checkout", mandatory: true, type: "browser" }
+      ]
     });
     expect(dependencies.events).toEqual([
       "transition:QUEUED->TESTING",
@@ -144,8 +223,68 @@ describe("ReleaseProcessor", () => {
       "artifact:SCREENSHOT",
       `test:run-browser-checkout:${candidateVersion === "v2" ? "FAILED" : "PASSED"}`,
       "transition:TESTING->ANALYZING",
+      `risk:analyze:${gate}`,
+      "risk:AI_UNAVAILABLE",
       `transition:ANALYZING->${gate}`
     ]);
+  });
+
+  it("ignores an attempted GPT gate override and persists analysis before the deterministic gate", async () => {
+    const dependencies = createDependencies({
+      candidateVersion: "v2",
+      riskAnalyzer: {
+        analyze: vi.fn().mockResolvedValue({
+          assessment: {
+            blastRadius: [],
+            compatibleRemediation: "Add aliases.",
+            confidence: "HIGH",
+            evidenceLinks: [],
+            rootCause: "Breaking field rename.",
+            uncertainty: "Registered consumers only.",
+            verificationSteps: ["Run mandatory tests."]
+          },
+          gate: "SAFE",
+          source: "GPT-5.6",
+          status: "AVAILABLE"
+        })
+      }
+    });
+
+    await expect(new ReleaseProcessor(dependencies).process(releaseId, 0)).resolves.toEqual({
+      gate: "BLOCKED"
+    });
+    expect(dependencies.events.slice(-2)).toEqual([
+      "risk:AVAILABLE",
+      "transition:ANALYZING->BLOCKED"
+    ]);
+  });
+
+  it.each([
+    ["planner failure", vi.fn().mockRejectedValue(new Error("GPT planning timeout"))],
+    ["untrusted planner output", vi.fn().mockResolvedValue(["arbitrary-script"])]
+  ])("runs every mandatory test after %s", async (_scenario, plan) => {
+    const dependencies = createDependencies({ riskPlanner: { plan } });
+
+    await expect(new ReleaseProcessor(dependencies).process(releaseId, 0)).resolves.toEqual({
+      gate: "BLOCKED"
+    });
+    expect(dependencies.mandatoryCheckExecutor.runMandatoryChecks).toHaveBeenCalledWith({
+      candidateVersion: "v2",
+      releaseId,
+      selectedTestIds: ["contract-pricing", "api-pricing", "browser-checkout"]
+    });
+  });
+
+  it("does not publish a terminal gate before the risk fallback is durable", async () => {
+    const dependencies = createDependencies();
+    vi.mocked(dependencies.riskAssessmentRepository.upsert).mockRejectedValue(
+      new Error("risk persistence unavailable")
+    );
+
+    await expect(new ReleaseProcessor(dependencies).process(releaseId, 0)).rejects.toMatchObject({
+      code: "CHECK_EXECUTION_FAILED"
+    });
+    expect(dependencies.events).not.toContain("transition:ANALYZING->BLOCKED");
   });
 
   it.each([

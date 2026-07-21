@@ -29,7 +29,24 @@ export interface ReleaseTestRunView {
   testId: string;
 }
 
+export interface ReleaseRiskAssessmentContentView {
+  blastRadius: string[];
+  compatibleRemediation: string;
+  confidence: "HIGH" | "LOW" | "MEDIUM";
+  evidenceLinks: Array<{ artifactId: string; explanation: string }>;
+  rootCause: string;
+  source: "GPT-5.6" | "deterministic/rule-based";
+  uncertainty: string;
+  verificationSteps: string[];
+}
+
+export interface ReleaseRiskAssessmentView {
+  assessment: ReleaseRiskAssessmentContentView;
+  status: "AI_UNAVAILABLE" | "AVAILABLE";
+}
+
 export interface ReleaseDetailsView extends ReleaseView {
+  riskAssessment: ReleaseRiskAssessmentView | null;
   testRuns: ReleaseTestRunView[];
   transitions: ReleaseTransitionView[];
 }

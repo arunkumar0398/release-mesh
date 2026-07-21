@@ -26,7 +26,11 @@ describe("DefaultMandatoryCheckExecutor", () => {
       });
 
       await expect(
-        executor.runMandatoryChecks({ candidateVersion, releaseId: "release-1" })
+        executor.runMandatoryChecks({
+          candidateVersion,
+          releaseId: "release-1",
+          selectedTestIds: ["contract-pricing", "api-pricing", "browser-checkout"]
+        })
       ).resolves.toEqual([
         expect.objectContaining({
           artifact: expect.objectContaining({ kind: "CONTRACT_DIFF" }),
@@ -62,7 +66,11 @@ describe("DefaultMandatoryCheckExecutor", () => {
     });
 
     await expect(
-      executor.runMandatoryChecks({ candidateVersion: "v2", releaseId: "release-timeout" })
+      executor.runMandatoryChecks({
+        candidateVersion: "v2",
+        releaseId: "release-timeout",
+        selectedTestIds: ["contract-pricing", "api-pricing", "browser-checkout"]
+      })
     ).rejects.toThrow("Pricing check failed: TIMEOUT");
   });
 });

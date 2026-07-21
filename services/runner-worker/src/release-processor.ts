@@ -1,5 +1,7 @@
 import {
   decideReleaseGate,
+  diffContract,
+  pricingContracts,
   type ArtifactStore,
   type DeterministicReleaseGate,
   type MandatoryTestStatus,
@@ -7,7 +9,16 @@ import {
 } from "@releasemesh/contracts";
 
 import type { PricingContractVersion } from "@releasemesh/contracts";
-import { trustedTestRegistry, type TrustedTestId } from "./test-registry.js";
+import type {
+  ReleasePlanningInput,
+  RiskAnalysisResult,
+  RiskEvidenceInput
+} from "@releasemesh/risk-engine";
+import {
+  resolveTrustedTests,
+  trustedTestRegistry,
+  type TrustedTestId
+} from "./test-registry.js";
 
 type CheckArtifact =
   | { content: string; contentType: "application/json"; kind: "CONTRACT_DIFF" }
@@ -25,13 +36,14 @@ export interface MandatoryCheckExecutor {
   runMandatoryChecks(input: {
     candidateVersion: PricingContractVersion;
     releaseId: string;
+    selectedTestIds: readonly TrustedTestId[];
   }): Promise<TrustedCheckResult[]>;
 }
 
 interface ProcessorRelease {
   attempt: number;
   componentVersion: {
-    component: { name: string };
+    component: { name: string; ownerTeam: string };
     version: string;
   };
   id: string;
@@ -70,10 +82,40 @@ interface TestRunRepositoryPort {
   }): Promise<{ id: string }>;
 }
 
+interface RiskAnalyzerPort {
+  analyze(evidence: RiskEvidenceInput): Promise<RiskAnalysisResult>;
+}
+
+interface RiskPlannerPort {
+  plan(input: ReleasePlanningInput<TrustedTestId>): Promise<readonly string[]>;
+}
+
+interface RiskEvidenceArtifact {
+  contentType: string;
+  id: string;
+  jsonContent: unknown;
+  kind: string;
+  sizeBytes: number;
+  testRun: { status: string; testId: string } | null;
+  textContent: string | null;
+}
+
+interface RiskAssessmentRepositoryPort {
+  loadEvidence(input: { attempt: number; releaseId: string }): Promise<RiskEvidenceArtifact[]>;
+  upsert(input: {
+    assessment: Record<string, unknown>;
+    releaseId: string;
+    status: RiskAnalysisResult["status"];
+  }): Promise<unknown>;
+}
+
 export interface ReleaseProcessorDependencies {
   artifactStore: ArtifactStore;
   mandatoryCheckExecutor: MandatoryCheckExecutor;
   releaseRepository: ProcessorReleaseRepository;
+  riskAnalyzer: RiskAnalyzerPort;
+  riskAssessmentRepository: RiskAssessmentRepositoryPort;
+  riskPlanner: RiskPlannerPort;
   testRunRepository: TestRunRepositoryPort;
 }
 
@@ -144,15 +186,40 @@ export class ReleaseProcessor {
           releaseId
         });
       }
-      const expectedMandatoryTestIds = Object.keys(trustedTestRegistry) as TrustedTestId[];
+      const expectedMandatoryTestIds = Object.values(trustedTestRegistry)
+        .filter(({ mandatory }) => mandatory)
+        .map(({ id }) => id);
+      const mandatoryTestIdSet = new Set<TrustedTestId>(expectedMandatoryTestIds);
+      const mandatoryResults = results.filter(
+        ({ testId }) => mandatoryTestIdSet.has(testId as TrustedTestId)
+      );
       const gate = decideReleaseGate({
-        evidenceComplete: results.every((result) => result.hasArtifact),
+        evidenceComplete: mandatoryResults.every((result) => result.hasArtifact),
         expectedMandatoryTestIds,
-        hasIncompatibleRegisteredDependency: results.some(
+        hasIncompatibleRegisteredDependency: mandatoryResults.some(
           (result) => result.hasIncompatibleRegisteredDependency
         ),
-        mandatoryTests: results.map(({ status, testId }) => ({ id: testId, status })),
+        mandatoryTests: mandatoryResults.map(({ status, testId }) => ({ id: testId, status })),
         requiredChecksCompleted: true
+      });
+
+      const evidence = await this.dependencies.riskAssessmentRepository.loadEvidence({
+        attempt: release.attempt,
+        releaseId
+      });
+      const riskAnalysis = await this.dependencies.riskAnalyzer.analyze(buildRiskEvidence({
+        artifacts: evidence,
+        gate,
+        pricingOwnerTeam: release.componentVersion.component.ownerTeam,
+        releaseId
+      }));
+      await this.dependencies.riskAssessmentRepository.upsert({
+        assessment: {
+          ...riskAnalysis.assessment,
+          source: riskAnalysis.source
+        },
+        releaseId,
+        status: riskAnalysis.status
       });
 
       await this.dependencies.releaseRepository.transitionRelease({
@@ -176,10 +243,12 @@ export class ReleaseProcessor {
     attempt: number,
     candidateVersion: PricingContractVersion
   ) {
+    const selectedTestIds = await this.selectTrustedTests(candidateVersion);
     await this.dependencies.testRunRepository.prepareAttempt({ attempt, releaseId });
     const results = await this.dependencies.mandatoryCheckExecutor.runMandatoryChecks({
       candidateVersion,
-      releaseId
+      releaseId,
+      selectedTestIds
     });
     await this.persistEvidence(releaseId, attempt, results);
     return results.map((result) => ({
@@ -188,6 +257,21 @@ export class ReleaseProcessor {
       status: result.status,
       testId: result.testId
     }));
+  }
+
+  private async selectTrustedTests(
+    candidateVersion: PricingContractVersion
+  ): Promise<TrustedTestId[]> {
+    const mandatoryTestIds = () => resolveTrustedTests([]).map(({ id }) => id);
+
+    try {
+      const selectedTestIds = await this.dependencies.riskPlanner.plan(
+        buildPlanningInput(candidateVersion)
+      );
+      return resolveTrustedTests(selectedTestIds).map(({ id }) => id);
+    } catch {
+      return mandatoryTestIds();
+    }
   }
 
   private async persistEvidence(
@@ -221,5 +305,76 @@ export class ReleaseProcessor {
         testRunId: testRun.id
       });
     }
+  }
+}
+
+function buildPlanningInput(
+  candidateVersion: PricingContractVersion
+): ReleasePlanningInput<TrustedTestId> {
+  return {
+    changedEndpoints: [{ method: "GET", path: "/pricing/:productId" }],
+    contractDiff: diffContract(pricingContracts.v1, pricingContracts[candidateVersion]),
+    dependencyGraph: [{
+      consumer: "checkout",
+      expectedContractVersion: "v1",
+      provider: "pricing",
+      requiredEndpoints: ["GET /pricing/:productId"]
+    }],
+    trustedTests: Object.values(trustedTestRegistry)
+  };
+}
+
+function buildRiskEvidence({
+  artifacts,
+  gate,
+  pricingOwnerTeam,
+  releaseId
+}: {
+  artifacts: RiskEvidenceArtifact[];
+  gate: DeterministicReleaseGate;
+  pricingOwnerTeam: string;
+  releaseId: string;
+}): RiskEvidenceInput {
+  const contractArtifact = artifacts.find(({ kind }) => kind === "CONTRACT_DIFF") ?? null;
+  const apiArtifact = artifacts.find(({ kind }) => kind === "SANITIZED_LOG") ?? null;
+  const browserArtifact = artifacts.find(({ kind }) => kind === "SCREENSHOT") ?? null;
+
+  return {
+    apiAssertions: apiArtifact === null ? null : {
+      artifactId: apiArtifact.id,
+      result: parseStructuredLog(apiArtifact.textContent)
+    },
+    browser: browserArtifact === null ? null : {
+      artifactId: browserArtifact.id,
+      screenshot: {
+        contentType: browserArtifact.contentType,
+        sizeBytes: browserArtifact.sizeBytes
+      },
+      summary: browserArtifact.testRun?.status === "PASSED"
+        ? "Checkout browser check passed."
+        : "Checkout browser check failed; persisted screenshot metadata is available."
+    },
+    contractDiff: contractArtifact === null ? null : {
+      artifactId: contractArtifact.id,
+      result: contractArtifact.jsonContent
+    },
+    deterministicGate: gate,
+    ownership: [
+      { component: "checkout", ownerTeam: "checkout-platform" },
+      { component: "pricing", ownerTeam: pricingOwnerTeam }
+    ],
+    releaseId,
+    sanitizedLogs: artifacts
+      .filter((artifact) => artifact.kind === "SANITIZED_LOG" && artifact.textContent !== null)
+      .map((artifact) => ({ artifactId: artifact.id, content: artifact.textContent as string }))
+  };
+}
+
+function parseStructuredLog(content: string | null): unknown {
+  if (content === null) return null;
+  try {
+    return JSON.parse(content) as unknown;
+  } catch {
+    return content;
   }
 }

@@ -149,11 +149,21 @@ describe("ReleaseRepository", () => {
       nextStatus: "ERROR",
       releaseId: created.release.id
     });
+    await prisma.riskAssessment.create({
+      data: {
+        assessment: { rootCause: "Attempt zero failed before retry." },
+        releaseId: created.release.id,
+        status: "AI_UNAVAILABLE"
+      }
+    });
 
     await expect(repository.retryRelease(created.release.id, "correlation-retry")).resolves.toMatchObject({
       attempt: 1,
       status: "QUEUED"
     });
+    await expect(prisma.riskAssessment.findUnique({
+      where: { releaseId: created.release.id }
+    })).resolves.toBeNull();
     await expect(repository.transitionRelease({
       correlationId: "stale-attempt-zero",
       expectedAttempt: 0,
@@ -224,6 +234,60 @@ describe("ReleaseRepository", () => {
     expect(details?.testRuns).toEqual([
       expect.objectContaining({ attempt: 0, status: "FAILED", testId: "contract-pricing" })
     ]);
+  });
+
+  it("atomically persists the fallback assessment with an exhausted ERROR transition", async () => {
+    const componentVersion = await createPricingVersion();
+    const created = await repository.createQueuedRelease({
+      componentVersionId: componentVersion.id,
+      correlationId: "correlation-worker-error",
+      idempotencyKey: "idem-worker-error"
+    });
+    const assessment = {
+      blastRadius: [],
+      compatibleRemediation: "Restore required checks and retry.",
+      confidence: "HIGH",
+      evidenceLinks: [],
+      rootCause: "Release entered deterministic ERROR after worker retries were exhausted.",
+      source: "deterministic/rule-based",
+      uncertainty: "Required checks did not complete.",
+      verificationSteps: ["Retry every mandatory check."]
+    };
+
+    await expect(repository.failRelease({
+      assessment,
+      correlationId: "correlation-worker-error",
+      errorCode: "WORKER_CRASHED",
+      expectedAttempt: 0,
+      expectedStatus: "TESTING",
+      releaseId: created.release.id
+    })).rejects.toThrow("Release status changed before failure could be applied");
+    await expect(prisma.riskAssessment.findUnique({
+      where: { releaseId: created.release.id }
+    })).resolves.toBeNull();
+
+    await expect(repository.failRelease({
+      assessment,
+      correlationId: "correlation-worker-error",
+      errorCode: "WORKER_CRASHED",
+      expectedAttempt: 0,
+      expectedStatus: "QUEUED",
+      releaseId: created.release.id
+    })).resolves.toMatchObject({ status: "ERROR" });
+    await expect(prisma.riskAssessment.findUnique({
+      where: { releaseId: created.release.id }
+    })).resolves.toMatchObject({
+      assessment,
+      status: "AI_UNAVAILABLE"
+    });
+    await expect(prisma.releaseTransition.findFirst({
+      orderBy: { createdAt: "desc" },
+      where: { releaseId: created.release.id }
+    })).resolves.toMatchObject({
+      errorCode: "WORKER_CRASHED",
+      fromStatus: "QUEUED",
+      toStatus: "ERROR"
+    });
   });
 });
 

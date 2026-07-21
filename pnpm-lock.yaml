@@ -182,7 +182,18 @@ importers:
         specifier: ^4.20.3
         version: 4.23.1
 
-  packages/risk-engine: {}
+  packages/risk-engine:
+    dependencies:
+      '@releasemesh/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      tsx:
+        specifier: ^4.20.3
+        version: 4.23.1
+      vitest:
+        specifier: ^3.0.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.1)
 
   packages/telemetry: {}
 
@@ -221,6 +232,9 @@ importers:
       '@releasemesh/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@releasemesh/risk-engine':
+        specifier: workspace:*
+        version: link:../../packages/risk-engine
       bullmq:
         specifier: ^5.34.4
         version: 5.80.9

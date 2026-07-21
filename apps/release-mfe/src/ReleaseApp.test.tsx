@@ -30,6 +30,19 @@ const queuedRelease: ReleaseSummary = {
 
 const blockedRelease: ReleaseDetails = {
   ...queuedRelease,
+  riskAssessment: {
+    assessment: {
+      blastRadius: ["Checkout cannot render Pricing v2."],
+      compatibleRemediation: "Add price and currency compatibility aliases.",
+      confidence: "HIGH",
+      evidenceLinks: [{ artifactId: "artifact-contract", explanation: "Required fields were removed." }],
+      rootCause: "Pricing v2 renamed fields required by Checkout.",
+      source: "GPT-5.6",
+      uncertainty: "Only registered consumers were evaluated.",
+      verificationSteps: ["Run every mandatory trusted test."]
+    },
+    status: "AVAILABLE"
+  },
   status: "BLOCKED",
   testRuns: [
     {
@@ -141,6 +154,9 @@ describe("ReleaseApp", () => {
     expect(within(evidence).getByRole("img", { name: "SCREENSHOT evidence" })).toHaveAttribute(
       "src",
       "data:image/png;base64,iVBORw0KGgo="
+    );
+    expect(screen.getByRole("region", { name: "Risk assessment" })).toHaveTextContent(
+      "GPT-5.6 advisory explanation"
     );
   });
 

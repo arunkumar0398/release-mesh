@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveTrustedTests, trustedTestRegistry } from "./test-registry.js";
+import {
+  resolveTrustedTests,
+  selectTrustedTestDefinitions,
+  trustedTestRegistry
+} from "./test-registry.js";
 
 describe("trusted test registry", () => {
   it("registers only the bundled Checkout and Pricing checks", () => {
@@ -24,5 +28,26 @@ describe("trusted test registry", () => {
       "Untrusted test id: pnpm --filter attacker test"
     );
     expect(() => resolveTrustedTests(["toString"])).toThrowError("Untrusted test id: toString");
+  });
+
+  it("adds allowlisted advisory tests without making them mandatory", () => {
+    const registry = {
+      "contract-pricing": {
+        id: "contract-pricing",
+        mandatory: true,
+        type: "contract"
+      },
+      "optional-browser": {
+        id: "optional-browser",
+        mandatory: false,
+        type: "browser"
+      }
+    } as const;
+
+    expect(selectTrustedTestDefinitions(registry, []).map(({ id }) => id)).toEqual([
+      "contract-pricing"
+    ]);
+    expect(selectTrustedTestDefinitions(registry, ["optional-browser"]).map(({ id }) => id))
+      .toEqual(["contract-pricing", "optional-browser"]);
   });
 });
