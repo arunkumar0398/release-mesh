@@ -2,5 +2,17 @@
   "name": "@releasemesh/risk-engine",
   "version": "0.1.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "ai-smoke": "tsx src/ai-smoke.ts",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "@releasemesh/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.3",
+    "vitest": "^3.0.4"
+  }
 }

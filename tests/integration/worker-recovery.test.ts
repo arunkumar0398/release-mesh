@@ -116,12 +116,31 @@ describe("worker recovery", () => {
       })
     ).resolves.toMatchObject({ errorCode: "WORKER_CRASHED", toStatus: "ERROR" });
     await expect(queue.getJob(release.id)).resolves.toBeUndefined();
+    await expect(prisma.riskAssessment.findUnique({
+      where: { releaseId: release.id }
+    })).resolves.toMatchObject({
+      assessment: expect.objectContaining({
+        rootCause: expect.stringContaining("deterministic ERROR"),
+        source: "deterministic/rule-based"
+      }),
+      status: "AI_UNAVAILABLE"
+    });
     expect(processor.process).toHaveBeenCalledTimes(3);
   }, 20_000);
 
   it("persists the exhausted operational error code after capped retries", async () => {
     const release = await createRelease("QUEUED");
     const releaseRepository = new ReleaseRepository(prisma);
+    await prisma.riskAssessment.create({
+      data: {
+        assessment: {
+          rootCause: "Stale prospective SAFE analysis.",
+          source: "GPT-5.6"
+        },
+        releaseId: release.id,
+        status: "AVAILABLE"
+      }
+    });
     const queue = createReleaseQueue({ queueName: `worker-operational-${randomUUID()}`, redisUrl });
     closeables.push(queue);
     const processor = {
@@ -160,6 +179,15 @@ describe("worker recovery", () => {
     ).resolves.toMatchObject({
       errorCode: "CHECK_EXECUTION_FAILED",
       toStatus: "ERROR"
+    });
+    await expect(prisma.riskAssessment.findUnique({
+      where: { releaseId: release.id }
+    })).resolves.toMatchObject({
+      assessment: expect.objectContaining({
+        rootCause: expect.stringContaining("deterministic ERROR"),
+        source: "deterministic/rule-based"
+      }),
+      status: "AI_UNAVAILABLE"
     });
     expect(processor.process).toHaveBeenCalledTimes(3);
   }, 20_000);
@@ -213,6 +241,15 @@ describe("worker recovery", () => {
     ).resolves.toEqual([release.id]);
     await expect(prisma.releaseCandidate.findUniqueOrThrow({ where: { id: release.id } })).resolves.toMatchObject({
       status: "ERROR"
+    });
+    await expect(prisma.riskAssessment.findUnique({
+      where: { releaseId: release.id }
+    })).resolves.toMatchObject({
+      assessment: expect.objectContaining({
+        rootCause: expect.stringContaining("deterministic ERROR"),
+        source: "deterministic/rule-based"
+      }),
+      status: "AI_UNAVAILABLE"
     });
   });
 

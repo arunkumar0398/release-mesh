@@ -1,4 +1,4 @@
-import type { ReleaseStatus } from "@releasemesh/contracts";
+import { buildDeterministicErrorAssessment } from "./deterministic-error-assessment.js";
 
 export function cappedExponentialBackoff(attemptsMade: number): number {
   return Math.min(1_000 * 2 ** Math.max(0, attemptsMade - 1), 30_000);
@@ -23,16 +23,15 @@ export async function recoverStrandedTestingReleases({
     >;
   };
   releaseRepository: {
-    findTestingBefore(cutoff: Date): Promise<Array<{ attempt: number; id: string }>>;
-    transitionRelease(input: {
+    failRelease(input: {
+      assessment: Record<string, unknown>;
       correlationId: string;
       errorCode: string;
-      expectedAttempt?: number;
-      expectedStatus: ReleaseStatus;
-      nextStatus: ReleaseStatus;
-      reason: string;
+      expectedAttempt: number;
+      expectedStatus: "TESTING";
       releaseId: string;
     }): Promise<unknown>;
+    findTestingBefore(cutoff: Date): Promise<Array<{ attempt: number; id: string }>>;
   };
 }): Promise<string[]> {
   const stranded = await releaseRepository.findTestingBefore(olderThan);
@@ -45,13 +44,12 @@ export async function recoverStrandedTestingReleases({
         const state = await job.getState();
         if (state === "active" || state === "delayed" || state === "waiting") continue;
       }
-      await releaseRepository.transitionRelease({
+      await releaseRepository.failRelease({
+        assessment: buildDeterministicErrorAssessment("WORKER_STALLED"),
         correlationId: `recovery:${release.id}`,
         errorCode: "WORKER_STALLED",
         expectedAttempt: release.attempt,
         expectedStatus: "TESTING",
-        nextStatus: "ERROR",
-        reason: "Runner heartbeat expired while release was TESTING",
         releaseId: release.id
       });
       recovered.push(release.id);

@@ -1,8 +1,8 @@
 export type TrustedTestId = "contract-pricing" | "api-pricing" | "browser-checkout";
 
-export interface TrustedTestDefinition {
-  id: TrustedTestId;
-  mandatory: true;
+export interface TrustedTestDefinition<TestId extends string = TrustedTestId> {
+  id: TestId;
+  mandatory: boolean;
   type: "contract" | "api" | "browser";
 }
 
@@ -25,11 +25,20 @@ export const trustedTestRegistry = {
 } as const satisfies Record<TrustedTestId, TrustedTestDefinition>;
 
 export function resolveTrustedTests(advisorySelection: readonly string[]): TrustedTestDefinition[] {
+  return selectTrustedTestDefinitions(trustedTestRegistry, advisorySelection);
+}
+
+export function selectTrustedTestDefinitions<TestId extends string>(
+  registry: Readonly<Record<TestId, TrustedTestDefinition<TestId>>>,
+  advisorySelection: readonly string[]
+): Array<TrustedTestDefinition<TestId>> {
   for (const testId of advisorySelection) {
-    if (!Object.hasOwn(trustedTestRegistry, testId)) {
+    if (!Object.hasOwn(registry, testId)) {
       throw new Error(`Untrusted test id: ${testId}`);
     }
   }
 
-  return Object.values(trustedTestRegistry);
+  const selectedIds = new Set(advisorySelection);
+  return (Object.values(registry) as Array<TrustedTestDefinition<TestId>>)
+    .filter(({ id, mandatory }) => mandatory || selectedIds.has(id));
 }

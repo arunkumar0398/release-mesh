@@ -5,13 +5,20 @@ import {
   createPrismaClient,
   PostgresArtifactStore,
   ReleaseRepository,
+  RiskAssessmentRepository,
   TestRunRepository,
   WorkerHeartbeatRepository
 } from "@releasemesh/database";
+import {
+  analyzeRisk,
+  createOpenAIResponsesClient,
+  planReleaseTests
+} from "@releasemesh/risk-engine";
 import { Worker, type Job } from "bullmq";
 
 import { createPricingApiCheck } from "./checks/api-check.js";
 import { createCheckoutBrowserCheck } from "./checks/browser-check.js";
+import { buildDeterministicErrorAssessment } from "./deterministic-error-assessment.js";
 import { DefaultMandatoryCheckExecutor } from "./mandatory-check-executor.js";
 import type { ReleaseProcessor } from "./release-processor.js";
 import {
@@ -42,7 +49,7 @@ export function startReleaseWorker({
   onError?: (error: Error) => void;
   processor: Pick<ReleaseProcessor, "process">;
   queue: ReleaseQueue;
-  releaseRepository: Pick<ReleaseRepository, "findReleaseById" | "transitionRelease">;
+  releaseRepository: Pick<ReleaseRepository, "failRelease" | "findReleaseById">;
 }): Worker<ReleaseJobData> {
   const worker = new Worker<ReleaseJobData>(
     queue.name,
@@ -79,19 +86,19 @@ export function startReleaseWorker({
 async function persistExhaustedFailure(
   job: Job<ReleaseJobData>,
   error: Error,
-  releaseRepository: Pick<ReleaseRepository, "findReleaseById" | "transitionRelease">
+  releaseRepository: Pick<ReleaseRepository, "failRelease" | "findReleaseById">
 ): Promise<void> {
   const release = await releaseRepository.findReleaseById(job.data.releaseId);
   if (!release || !["QUEUED", "TESTING", "ANALYZING"].includes(release.status)) return;
   if (release.attempt !== job.data.attempt) return;
 
-  await releaseRepository.transitionRelease({
+  const errorCode = error instanceof ReleaseProcessingError ? error.code : "WORKER_CRASHED";
+  await releaseRepository.failRelease({
+    assessment: buildDeterministicErrorAssessment(errorCode),
     correlationId: `worker-failure:${job.data.releaseId}`,
-    errorCode: error instanceof ReleaseProcessingError ? error.code : "WORKER_CRASHED",
+    errorCode,
     expectedAttempt: job.data.attempt,
     expectedStatus: release.status as "QUEUED" | "TESTING" | "ANALYZING",
-    nextStatus: "ERROR",
-    reason: error.message,
     releaseId: job.data.releaseId
   });
 }
@@ -106,7 +113,16 @@ export async function startRunnerRuntime() {
   await prisma.$connect();
   const queue = createReleaseQueue({ redisUrl });
   const releaseRepository = new ReleaseRepository(prisma);
+  const riskAssessmentRepository = new RiskAssessmentRepository(prisma);
   const heartbeatRepository = new WorkerHeartbeatRepository(prisma);
+  const openAIApiKey = process.env.OPENAI_API_KEY?.trim();
+  const riskClient = openAIApiKey
+    ? createOpenAIResponsesClient({
+        apiKey: openAIApiKey,
+        model: process.env.OPENAI_MODEL?.trim() || "gpt-5.6",
+        timeoutMs: Number.parseInt(process.env.OPENAI_TIMEOUT_MS ?? "8000", 10)
+      })
+    : null;
 
   const recoverySweep = startQueuedReleaseReconciler({
     intervalMs: Number.parseInt(process.env.RECOVERY_SWEEP_INTERVAL_MS ?? "10000", 10),
@@ -145,6 +161,13 @@ export async function startRunnerRuntime() {
       })
     }),
     releaseRepository,
+    riskAnalyzer: {
+      analyze: (evidence) => analyzeRisk({ client: riskClient, evidence })
+    },
+    riskAssessmentRepository,
+    riskPlanner: {
+      plan: async (input) => (await planReleaseTests({ client: riskClient, input })).selectedTestIds
+    },
     testRunRepository: new TestRunRepository(prisma)
   });
   const worker = startReleaseWorker({ processor, queue, releaseRepository });

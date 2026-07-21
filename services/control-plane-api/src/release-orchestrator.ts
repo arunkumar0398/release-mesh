@@ -9,6 +9,7 @@ import type {
   BundledPricingCandidate,
   ReleaseArtifactView,
   ReleaseDetailsView,
+  ReleaseRiskAssessmentView,
   ReleaseView,
   SubmitReleaseInput
 } from "./routes/releases.js";
@@ -67,6 +68,9 @@ export class ReleaseOrchestrator {
 
     return {
       ...toReleaseView(release),
+      riskAssessment: release.riskAssessment === null
+        ? null
+        : toRiskAssessmentView(release.riskAssessment),
       testRuns: release.testRuns.map((testRun) => ({
         attempt: testRun.attempt,
         endedAt: testRun.endedAt?.toISOString() ?? null,
@@ -112,12 +116,12 @@ export class ReleaseOrchestrator {
     try {
       await this.dependencies.queue.enqueue(result.release.id, result.release.attempt);
     } catch (error) {
-      await this.dependencies.releaseRepository.transitionRelease({
+      await this.dependencies.releaseRepository.failRelease({
+        assessment: buildQueueFailureAssessment(),
         correlationId: input.correlationId,
         errorCode: "QUEUE_ENQUEUE_FAILED",
+        expectedAttempt: result.release.attempt,
         expectedStatus: "QUEUED",
-        nextStatus: "ERROR",
-        reason: error instanceof Error ? error.message : "Queue enqueue failed",
         releaseId: result.release.id
       });
       throw new ReleaseQueueUnavailableError(error);
@@ -151,12 +155,12 @@ export class ReleaseOrchestrator {
       try {
         await this.dependencies.queue.enqueue(releaseId, release.attempt);
       } catch (error) {
-        await this.dependencies.releaseRepository.transitionRelease({
+        await this.dependencies.releaseRepository.failRelease({
+          assessment: buildQueueFailureAssessment(),
           correlationId,
           errorCode: "QUEUE_ENQUEUE_FAILED",
+          expectedAttempt: release.attempt,
           expectedStatus: "QUEUED",
-          nextStatus: "ERROR",
-          reason: error instanceof Error ? error.message : "Queue enqueue failed",
           releaseId
         });
         throw new ReleaseQueueUnavailableError(error);
@@ -167,6 +171,93 @@ export class ReleaseOrchestrator {
       return toReleaseView(hydrated);
     });
   }
+}
+
+function buildQueueFailureAssessment(): Record<string, unknown> {
+  return {
+    blastRadius: [],
+    compatibleRemediation: "Restore Redis/BullMQ availability, then retry every mandatory trusted check.",
+    confidence: "HIGH",
+    evidenceLinks: [],
+    rootCause: "Release entered deterministic ERROR after QUEUE_ENQUEUE_FAILED.",
+    source: "deterministic/rule-based",
+    uncertainty: "No trusted checks ran, so no release-safety inference is available.",
+    verificationSteps: [
+      "Restore Redis/BullMQ availability.",
+      "Retry the release and rerun every mandatory trusted check."
+    ]
+  };
+}
+
+function toRiskAssessmentView(riskAssessment: {
+  assessment: unknown;
+  status: string;
+}): ReleaseRiskAssessmentView {
+  if (riskAssessment.status !== "AVAILABLE" && riskAssessment.status !== "AI_UNAVAILABLE") {
+    throw new Error("Persisted risk assessment has an invalid status");
+  }
+  if (
+    typeof riskAssessment.assessment !== "object"
+    || riskAssessment.assessment === null
+    || Array.isArray(riskAssessment.assessment)
+  ) {
+    throw new Error("Persisted risk assessment has invalid content");
+  }
+  const assessment = riskAssessment.assessment as Record<string, unknown>;
+  const source = assessment.source;
+  const confidence = assessment.confidence;
+  if (source !== "GPT-5.6" && source !== "deterministic/rule-based") {
+    throw new Error("Persisted risk assessment has an invalid source");
+  }
+  if (
+    (riskAssessment.status === "AVAILABLE" && source !== "GPT-5.6")
+    || (riskAssessment.status === "AI_UNAVAILABLE" && source !== "deterministic/rule-based")
+  ) {
+    throw new Error("Persisted risk assessment status does not match its source");
+  }
+  if (confidence !== "HIGH" && confidence !== "LOW" && confidence !== "MEDIUM") {
+    throw new Error("Persisted risk assessment has invalid confidence");
+  }
+
+  return {
+    assessment: {
+      blastRadius: readStringArray(assessment.blastRadius),
+      compatibleRemediation: readString(assessment.compatibleRemediation),
+      confidence,
+      evidenceLinks: readEvidenceLinks(assessment.evidenceLinks),
+      rootCause: readString(assessment.rootCause),
+      source,
+      uncertainty: readString(assessment.uncertainty),
+      verificationSteps: readStringArray(assessment.verificationSteps)
+    },
+    status: riskAssessment.status
+  };
+}
+
+function readEvidenceLinks(value: unknown): Array<{ artifactId: string; explanation: string }> {
+  if (!Array.isArray(value)) throw new Error("Persisted risk assessment has invalid evidence links");
+  return value.map((link) => {
+    if (typeof link !== "object" || link === null || Array.isArray(link)) {
+      throw new Error("Persisted risk assessment has an invalid evidence link");
+    }
+    const record = link as Record<string, unknown>;
+    return {
+      artifactId: readString(record.artifactId),
+      explanation: readString(record.explanation)
+    };
+  });
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error("Persisted risk assessment has an invalid list");
+  return value.map(readString);
+}
+
+function readString(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("Persisted risk assessment has invalid text");
+  }
+  return value;
 }
 
 function toReleaseView(release: {
