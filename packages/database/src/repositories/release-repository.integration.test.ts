@@ -195,6 +195,36 @@ describe("ReleaseRepository", () => {
       expect.objectContaining({ attempt: 1, fromStatus: "ANALYZING", toStatus: "SAFE" })
     ]);
   });
+
+  it("loads persisted lifecycle and test runs for release inspection", async () => {
+    const componentVersion = await createPricingVersion();
+    const created = await repository.createQueuedRelease({
+      componentVersionId: componentVersion.id,
+      correlationId: "correlation-evidence",
+      idempotencyKey: "idem-evidence"
+    });
+    await prisma.testRun.create({
+      data: {
+        attempt: 0,
+        endedAt: new Date("2026-07-21T12:00:01.000Z"),
+        releaseId: created.release.id,
+        startedAt: new Date("2026-07-21T12:00:00.000Z"),
+        status: "FAILED",
+        testId: "contract-pricing"
+      }
+    });
+
+    const details = await repository.findReleaseDetailsById(created.release.id);
+
+    expect(details?.transitions.map(({ fromStatus, toStatus }) => ({ fromStatus, toStatus }))).toEqual([
+      { fromStatus: null, toStatus: "DRAFT" },
+      { fromStatus: "DRAFT", toStatus: "VALIDATING" },
+      { fromStatus: "VALIDATING", toStatus: "QUEUED" }
+    ]);
+    expect(details?.testRuns).toEqual([
+      expect.objectContaining({ attempt: 0, status: "FAILED", testId: "contract-pricing" })
+    ]);
+  });
 });
 
 async function createPricingVersion() {

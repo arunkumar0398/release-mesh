@@ -55,6 +55,17 @@ export class ReleaseRepository {
     });
   }
 
+  public findReleaseDetailsById(releaseId: string) {
+    return this.prisma.releaseCandidate.findUnique({
+      include: {
+        componentVersion: { include: { component: true } },
+        testRuns: { orderBy: [{ attempt: "asc" }, { startedAt: "asc" }] },
+        transitions: { orderBy: { createdAt: "asc" } }
+      },
+      where: { id: releaseId }
+    });
+  }
+
   public listArtifacts(releaseId: string) {
     return this.prisma.evidenceArtifact.findMany({
       include: { testRun: { select: { attempt: true } } },

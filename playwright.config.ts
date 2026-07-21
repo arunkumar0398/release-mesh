@@ -5,6 +5,7 @@ export default defineConfig({
   preserveOutput: "always",
   testDir: "./tests/e2e",
   timeout: 30_000,
+  workers: 1,
   use: {
     trace: "retain-on-failure"
   }

@@ -1,0 +1,6 @@
+{
+  "release": {
+    "apiBaseUrl": "/api",
+    "manifestUrl": "http://127.0.0.1:4175/mf-manifest.json"
+  }
+}

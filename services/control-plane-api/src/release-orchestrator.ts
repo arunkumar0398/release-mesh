@@ -8,6 +8,7 @@ import type { ReleaseQueuePort } from "@releasemesh/runner-worker/queue";
 import type {
   BundledPricingCandidate,
   ReleaseArtifactView,
+  ReleaseDetailsView,
   ReleaseView,
   SubmitReleaseInput
 } from "./routes/releases.js";
@@ -60,9 +61,30 @@ export class ReleaseOrchestrator {
     }));
   }
 
-  public async getRelease(releaseId: string): Promise<ReleaseView | null> {
-    const release = await this.dependencies.releaseRepository.findReleaseById(releaseId);
-    return release ? toReleaseView(release) : null;
+  public async getRelease(releaseId: string): Promise<ReleaseDetailsView | null> {
+    const release = await this.dependencies.releaseRepository.findReleaseDetailsById(releaseId);
+    if (!release) return null;
+
+    return {
+      ...toReleaseView(release),
+      testRuns: release.testRuns.map((testRun) => ({
+        attempt: testRun.attempt,
+        endedAt: testRun.endedAt?.toISOString() ?? null,
+        id: testRun.id,
+        startedAt: testRun.startedAt?.toISOString() ?? null,
+        status: testRun.status,
+        testId: testRun.testId
+      })),
+      transitions: release.transitions.map((transition) => ({
+        attempt: transition.attempt,
+        createdAt: transition.createdAt.toISOString(),
+        errorCode: transition.errorCode,
+        fromStatus: transition.fromStatus as ReleaseStatus | null,
+        id: transition.id,
+        reason: transition.reason,
+        toStatus: transition.toStatus as ReleaseStatus
+      }))
+    };
   }
 
   public async submitRelease(
