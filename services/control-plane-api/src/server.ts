@@ -8,6 +8,7 @@ import {
   WorkerHeartbeatRepository
 } from "@releasemesh/database";
 import { createReleaseQueue } from "@releasemesh/runner-worker/queue";
+import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { HealthService } from "./health-service.js";
@@ -34,11 +35,21 @@ export interface ControlPlaneDependencies {
   releases: ReleaseRoutesDependencies;
 }
 
+export interface ControlPlaneServerOptions {
+  allowedOrigins?: string[];
+}
+
 export function buildControlPlaneServer(
   dependencies: ControlPlaneDependencies,
-  logger = false
+  logger = false,
+  { allowedOrigins = [] }: ControlPlaneServerOptions = {}
 ): FastifyInstance {
   const server = Fastify({ logger });
+  if (allowedOrigins.length > 0) {
+    void server.register(cors, {
+      origin: (origin, callback) => callback(null, origin !== undefined && allowedOrigins.includes(origin))
+    });
+  }
   server.setErrorHandler((error, request, reply) => {
     if (error instanceof IdempotencyConflictError) {
       return reply.code(409).send({ message: error.message });
@@ -102,7 +113,7 @@ export async function startControlPlaneServer() {
     },
     health,
     releases
-  }, true);
+  }, true, { allowedOrigins: readAllowedOrigins(process.env.CONTROL_PLANE_ALLOWED_ORIGINS) });
   await server.listen({ host: "0.0.0.0", port });
 
   return {
@@ -119,6 +130,10 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+export function readAllowedOrigins(value: string | undefined): string[] {
+  return value?.split(",").map((origin) => origin.trim()).filter(Boolean) ?? [];
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

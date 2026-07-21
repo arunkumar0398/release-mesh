@@ -62,7 +62,7 @@ export function App({ loadReleaseRemote = loadRuntimeReleaseRemote }: AppProps):
         ) : null}
         {remoteState.status === "ready" ? (
           <RemoteErrorBoundary>
-            <remoteState.remote.ReleaseApp />
+            <remoteState.remote.ReleaseApp apiBaseUrl={remoteState.remote.apiBaseUrl} />
           </RemoteErrorBoundary>
         ) : null}
       </section>

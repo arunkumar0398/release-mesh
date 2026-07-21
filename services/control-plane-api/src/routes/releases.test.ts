@@ -244,6 +244,41 @@ describe("release routes", () => {
   });
 });
 
+describe("control-plane CORS", () => {
+  it("allows configured frontend origins and rejects untrusted origins", async () => {
+    const server = buildControlPlaneServer(createDependencies(), false, {
+      allowedOrigins: ["https://shell.example", "https://release.example"]
+    });
+    servers.push(server);
+
+    const allowed = await server.inject({
+      headers: { origin: "https://shell.example" },
+      method: "GET",
+      url: "/livez"
+    });
+    const rejected = await server.inject({
+      headers: { origin: "https://attacker.example" },
+      method: "GET",
+      url: "/livez"
+    });
+    const preflight = await server.inject({
+      headers: {
+        "access-control-request-headers": "content-type, idempotency-key",
+        "access-control-request-method": "POST",
+        origin: "https://shell.example"
+      },
+      method: "OPTIONS",
+      url: "/releases"
+    });
+
+    expect(allowed.headers["access-control-allow-origin"]).toBe("https://shell.example");
+    expect(rejected.headers["access-control-allow-origin"]).toBeUndefined();
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe("https://shell.example");
+    expect(preflight.headers["access-control-allow-headers"]).toContain("idempotency-key");
+  });
+});
+
 describe("catalogue and health routes", () => {
   it("exposes components, dependencies, and worker heartbeat freshness", async () => {
     const dependencies = createDependencies();

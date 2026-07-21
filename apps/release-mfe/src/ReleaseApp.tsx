@@ -5,9 +5,16 @@ import {
   type PricingCandidate,
   type ReleaseAppClient,
   type ReleaseArtifact,
+  ReleaseApiError,
   type ReleaseDetails,
   type ReleaseSummary
 } from "./api.js";
+import {
+  clearPendingSubmissionKey,
+  createReleaseIdempotencyKey,
+  readPendingSubmissionKey,
+  writePendingSubmissionKey
+} from "./idempotency.js";
 import "./styles.css";
 
 export const releaseMfeVersion = "0.1.0";
@@ -15,18 +22,28 @@ export const releaseMfeVersion = "0.1.0";
 export interface ReleaseAppProps {
   apiBaseUrl?: string;
   client?: ReleaseAppClient;
+  maxPollIntervalMs?: number;
   pollIntervalMs?: number;
+  pollTimeoutMs?: number;
+}
+
+interface ActiveReleaseState {
+  artifacts: ReleaseArtifact[];
+  details: ReleaseDetails | null;
+  evidenceError: string | null;
+  evidenceLoading: boolean;
+  pollError: string | null;
+  polling: boolean;
+  release: ReleaseSummary;
+  retryError: string | null;
+  retrying: boolean;
+  status: "active";
 }
 
 type ReleaseState =
   | { status: "idle" }
   | { candidateVersion: PricingCandidate; status: "submitting" }
-  | {
-      artifacts: ReleaseArtifact[];
-      details: ReleaseDetails | null;
-      release: ReleaseSummary;
-      status: "active";
-    }
+  | ActiveReleaseState
   | { message: string; status: "error" };
 
 const terminalStatuses = new Set(["BLOCKED", "ERROR", "SAFE"]);
@@ -34,29 +51,62 @@ const terminalStatuses = new Set(["BLOCKED", "ERROR", "SAFE"]);
 export function ReleaseApp({
   apiBaseUrl = "/api",
   client,
-  pollIntervalMs = 500
+  maxPollIntervalMs = 4_000,
+  pollIntervalMs = 500,
+  pollTimeoutMs = 30_000
 }: ReleaseAppProps): React.JSX.Element {
   const api = useMemo(() => client ?? createReleaseApiClient(apiBaseUrl), [apiBaseUrl, client]);
+  const requestController = useRef<AbortController | null>(null);
   const requestGeneration = useRef(0);
+  const pendingSubmissions = useRef(new Map<PricingCandidate, string>());
   const [state, setState] = useState<ReleaseState>({ status: "idle" });
 
   useEffect(() => () => {
     requestGeneration.current += 1;
+    requestController.current?.abort();
   }, []);
 
-  async function createRelease(candidateVersion: PricingCandidate): Promise<void> {
+  function beginRequest(): { controller: AbortController; generation: number } {
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
     const generation = requestGeneration.current + 1;
     requestGeneration.current = generation;
+    return { controller, generation };
+  }
+
+  async function createRelease(candidateVersion: PricingCandidate): Promise<void> {
+    const { controller, generation } = beginRequest();
+    const idempotencyKey = pendingSubmissions.current.get(candidateVersion)
+      ?? readPendingSubmissionKey(candidateVersion)
+      ?? createReleaseIdempotencyKey(candidateVersion);
+    pendingSubmissions.current.set(candidateVersion, idempotencyKey);
+    writePendingSubmissionKey(candidateVersion, idempotencyKey);
     setState({ candidateVersion, status: "submitting" });
 
     try {
-      const idempotencyKey = createIdempotencyKey(candidateVersion);
-      const release = await api.createRelease(candidateVersion, idempotencyKey);
+      const release = await api.createRelease(candidateVersion, idempotencyKey, controller.signal);
       if (requestGeneration.current !== generation) return;
-      setState({ artifacts: [], details: null, release, status: "active" });
-      await pollRelease(api, release, generation, requestGeneration, pollIntervalMs, setState);
+      pendingSubmissions.current.delete(candidateVersion);
+      clearPendingSubmissionKey(candidateVersion);
+      setState(createActiveState(release));
+      await pollRelease({
+        client: api,
+        controller,
+        generation,
+        generationRef: requestGeneration,
+        maxPollIntervalMs,
+        pollIntervalMs,
+        pollTimeoutMs,
+        release,
+        setState
+      });
     } catch (error) {
-      if (requestGeneration.current === generation) {
+      if (requestGeneration.current === generation && !isAbortError(error)) {
+        if (!isUncertainSubmissionError(error)) {
+          pendingSubmissions.current.delete(candidateVersion);
+          clearPendingSubmissionKey(candidateVersion);
+        }
         setState({
           message: error instanceof Error ? error.message : "Release request failed",
           status: "error"
@@ -65,9 +115,95 @@ export function ReleaseApp({
     }
   }
 
-  const activeRelease = state.status === "active" ? state.details ?? state.release : null;
+  async function resumeStatusChecks(release: ReleaseSummary): Promise<void> {
+    const { controller, generation } = beginRequest();
+    updateActiveState(setState, release.id, (active) => ({
+      ...active,
+      pollError: null,
+      polling: true
+    }));
+    await pollRelease({
+      client: api,
+      controller,
+      generation,
+      generationRef: requestGeneration,
+      maxPollIntervalMs,
+      pollIntervalMs,
+      pollTimeoutMs,
+      release,
+      setState
+    });
+  }
+
+  async function retryEvidence(release: ReleaseSummary): Promise<void> {
+    const { controller, generation } = beginRequest();
+    await loadArtifacts(api, release, controller, generation, requestGeneration, setState);
+  }
+
+  async function retryRelease(release: ReleaseSummary): Promise<void> {
+    const { controller, generation } = beginRequest();
+    updateActiveState(setState, release.id, (active) => ({
+      ...active,
+      retryError: null,
+      retrying: true
+    }));
+    try {
+      const retriedRelease = await api.retryRelease(release.id, controller.signal);
+      if (requestGeneration.current !== generation) return;
+      setState(createActiveState(retriedRelease));
+      await pollRelease({
+        client: api,
+        controller,
+        generation,
+        generationRef: requestGeneration,
+        maxPollIntervalMs,
+        pollIntervalMs,
+        pollTimeoutMs,
+        release: retriedRelease,
+        setState
+      });
+    } catch (error) {
+      if (requestGeneration.current === generation && !isAbortError(error)) {
+        const retryError = error instanceof Error ? error.message : "Release retry failed";
+        try {
+          const reconciledRelease = await api.getRelease(release.id, controller.signal);
+          if (requestGeneration.current !== generation) return;
+          if (reconciledRelease.status !== "ERROR") {
+            setState(createActiveState(reconciledRelease));
+            await pollRelease({
+              client: api,
+              controller,
+              generation,
+              generationRef: requestGeneration,
+              maxPollIntervalMs,
+              pollIntervalMs,
+              pollTimeoutMs,
+              release: reconciledRelease,
+              setState
+            });
+            return;
+          }
+          setState({
+            ...createActiveState(reconciledRelease),
+            details: reconciledRelease,
+            polling: false,
+            retryError
+          });
+        } catch (reconciliationError) {
+          if (requestGeneration.current === generation && !isAbortError(reconciliationError)) {
+            updateActiveState(setState, release.id, (active) => ({
+              ...active,
+              retryError,
+              retrying: false
+            }));
+          }
+        }
+      }
+    }
+  }
+
   const isBusy = state.status === "submitting"
-    || (state.status === "active" && !terminalStatuses.has(activeRelease?.status ?? ""));
+    || (state.status === "active" && (state.polling || state.retrying));
 
   return (
     <main className="release-app">
@@ -96,9 +232,10 @@ export function ReleaseApp({
 
       {state.status === "active" ? (
         <ReleaseInspection
-          artifacts={state.artifacts}
-          details={state.details}
-          release={state.release}
+          state={state}
+          onResumeStatus={() => void resumeStatusChecks(state.release)}
+          onRetryEvidence={() => void retryEvidence(state.release)}
+          onRetryRelease={() => void retryRelease(state.release)}
         />
       ) : null}
     </main>
@@ -106,15 +243,17 @@ export function ReleaseApp({
 }
 
 function ReleaseInspection({
-  artifacts,
-  details,
-  release
+  onResumeStatus,
+  onRetryEvidence,
+  onRetryRelease,
+  state
 }: {
-  artifacts: ReleaseArtifact[];
-  details: ReleaseDetails | null;
-  release: ReleaseSummary;
+  onResumeStatus: () => void;
+  onRetryEvidence: () => void;
+  onRetryRelease: () => void;
+  state: ActiveReleaseState;
 }): React.JSX.Element {
-  const current = details ?? release;
+  const current = state.details ?? state.release;
   const terminal = terminalStatuses.has(current.status);
 
   return (
@@ -142,9 +281,30 @@ function ReleaseInspection({
         <p aria-live="polite" role="status">Release status: {current.status}</p>
       )}
 
-      {details ? <Lifecycle transitions={details.transitions} /> : null}
-      {details ? <TestRuns testRuns={details.testRuns} /> : null}
-      {terminal ? <Evidence artifacts={artifacts} /> : null}
+      {state.pollError ? (
+        <div className="request-warning" role="alert">
+          <p>{state.pollError}</p>
+          <button onClick={onResumeStatus} type="button">Resume status checks</button>
+        </div>
+      ) : null}
+      {current.status === "ERROR" ? (
+        <div className="retry-release">
+          <button disabled={state.retrying} onClick={onRetryRelease} type="button">
+            {state.retrying ? "Retrying release…" : "Retry release"}
+          </button>
+          {state.retryError ? <p role="alert">{state.retryError}</p> : null}
+        </div>
+      ) : null}
+      {state.details ? <Lifecycle transitions={state.details.transitions} /> : null}
+      {state.details ? <TestRuns testRuns={state.details.testRuns} /> : null}
+      {terminal ? (
+        <Evidence
+          artifacts={state.artifacts}
+          error={state.evidenceError}
+          loading={state.evidenceLoading}
+          onRetry={onRetryEvidence}
+        />
+      ) : null}
     </section>
   );
 }
@@ -171,7 +331,7 @@ function TestRuns({ testRuns }: { testRuns: ReleaseDetails["testRuns"] }): React
     <section aria-label="Mandatory test runs">
       <h2>Mandatory test runs</h2>
       {testRuns.length === 0 ? <p>Waiting for trusted checks…</p> : (
-        <ul>
+        <ul className="test-run-list">
           {testRuns.map((testRun) => (
             <li key={testRun.id}>
               <strong>{testRun.testId}</strong>
@@ -184,11 +344,29 @@ function TestRuns({ testRuns }: { testRuns: ReleaseDetails["testRuns"] }): React
   );
 }
 
-function Evidence({ artifacts }: { artifacts: ReleaseArtifact[] }): React.JSX.Element {
+function Evidence({
+  artifacts,
+  error,
+  loading,
+  onRetry
+}: {
+  artifacts: ReleaseArtifact[];
+  error: string | null;
+  loading: boolean;
+  onRetry: () => void;
+}): React.JSX.Element {
   return (
     <section aria-label="Release evidence">
       <h2>Evidence</h2>
-      {artifacts.length === 0 ? <p>No persisted evidence was returned.</p> : (
+      {loading ? <p aria-live="polite" role="status">Loading persisted evidence…</p> : null}
+      {error ? (
+        <div className="request-warning" role="alert">
+          <p>{error}</p>
+          <button onClick={onRetry} type="button">Retry evidence</button>
+        </div>
+      ) : null}
+      {!loading && !error && artifacts.length === 0 ? <p>No persisted evidence was returned.</p> : null}
+      {artifacts.length > 0 ? (
         <div className="evidence-grid">
           {artifacts.map((artifact) => (
             <article key={artifact.id}>
@@ -205,39 +383,205 @@ function Evidence({ artifacts }: { artifacts: ReleaseArtifact[] }): React.JSX.El
             </article>
           ))}
         </div>
-      )}
+      ) : null}
     </section>
   );
 }
 
-async function pollRelease(
-  client: ReleaseAppClient,
-  release: ReleaseSummary,
-  generation: number,
-  generationRef: React.MutableRefObject<number>,
-  pollIntervalMs: number,
-  setState: React.Dispatch<React.SetStateAction<ReleaseState>>
-): Promise<void> {
-  while (generationRef.current === generation) {
-    const details = await client.getRelease(release.id);
-    if (generationRef.current !== generation) return;
-    setState({ artifacts: [], details, release, status: "active" });
-    if (terminalStatuses.has(details.status)) {
-      const artifacts = await client.listArtifacts(release.id);
-      if (generationRef.current === generation) {
-        setState({ artifacts, details, release, status: "active" });
+interface PollReleaseOptions {
+  client: ReleaseAppClient;
+  controller: AbortController;
+  generation: number;
+  generationRef: React.MutableRefObject<number>;
+  maxPollIntervalMs: number;
+  pollIntervalMs: number;
+  pollTimeoutMs: number;
+  release: ReleaseSummary;
+  setState: React.Dispatch<React.SetStateAction<ReleaseState>>;
+}
+
+async function pollRelease({
+  client,
+  controller,
+  generation,
+  generationRef,
+  maxPollIntervalMs,
+  pollIntervalMs,
+  pollTimeoutMs,
+  release,
+  setState
+}: PollReleaseOptions): Promise<void> {
+  const startedAt = Date.now();
+  let nextIntervalMs = pollIntervalMs;
+
+  try {
+    while (generationRef.current === generation) {
+      const remainingMs = Math.max(pollTimeoutMs - (Date.now() - startedAt), 0);
+      const details = await requestBeforeDeadline(
+        client.getRelease(release.id, controller.signal),
+        remainingMs,
+        controller
+      );
+      if (generationRef.current !== generation) return;
+      updateActiveState(setState, release.id, (active) => ({
+        ...active,
+        details,
+        pollError: null,
+        polling: !terminalStatuses.has(details.status)
+      }));
+      if (terminalStatuses.has(details.status)) {
+        await loadArtifacts(client, release, controller, generation, generationRef, setState);
+        return;
       }
-      return;
+      if (Date.now() - startedAt >= pollTimeoutMs) {
+        updateActiveState(setState, release.id, (active) => ({
+          ...active,
+          pollError: "Status checks paused before a terminal result. Resume to continue polling.",
+          polling: false
+        }));
+        return;
+      }
+      const remainingAfterRequestMs = Math.max(pollTimeoutMs - (Date.now() - startedAt), 0);
+      await delay(Math.min(nextIntervalMs, remainingAfterRequestMs), controller.signal);
+      if (Date.now() - startedAt >= pollTimeoutMs) throw new PollTimeoutError();
+      nextIntervalMs = Math.min(Math.max(nextIntervalMs * 2, 1), maxPollIntervalMs);
     }
-    await delay(pollIntervalMs);
+  } catch (error) {
+    if (generationRef.current === generation && error instanceof PollTimeoutError) {
+      updateActiveState(setState, release.id, (active) => ({
+        ...active,
+        pollError: "Status checks paused before a terminal result. Resume to continue polling.",
+        polling: false
+      }));
+    } else if (generationRef.current === generation && !isAbortError(error)) {
+      updateActiveState(setState, release.id, (active) => ({
+        ...active,
+        pollError: error instanceof Error ? error.message : "Status checks paused",
+        polling: false
+      }));
+    }
   }
 }
 
-function createIdempotencyKey(candidateVersion: PricingCandidate): string {
-  const normalizedVersion = candidateVersion.replace(".", "-");
-  return `release-${normalizedVersion}-${Date.now()}-${crypto.randomUUID()}`;
+class PollTimeoutError extends Error {
+  public constructor() {
+    super("Release polling deadline expired");
+    this.name = "PollTimeoutError";
+  }
 }
 
-function delay(durationMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, durationMs));
+function requestBeforeDeadline<T>(
+  request: Promise<T>,
+  timeoutMs: number,
+  controller: AbortController
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (complete: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      controller.signal.removeEventListener("abort", onAbort);
+      complete();
+    };
+    const onAbort = () => finish(() => reject(new DOMException("Request aborted", "AbortError")));
+    const timer = setTimeout(() => {
+      finish(() => reject(new PollTimeoutError()));
+      controller.abort();
+    }, timeoutMs);
+    if (controller.signal.aborted) {
+      onAbort();
+      return;
+    }
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+    void request.then(
+      (value) => finish(() => resolve(value)),
+      (error: unknown) => finish(() => reject(error))
+    );
+  });
+}
+
+async function loadArtifacts(
+  client: ReleaseAppClient,
+  release: ReleaseSummary,
+  controller: AbortController,
+  generation: number,
+  generationRef: React.MutableRefObject<number>,
+  setState: React.Dispatch<React.SetStateAction<ReleaseState>>
+): Promise<void> {
+  updateActiveState(setState, release.id, (active) => ({
+    ...active,
+    evidenceError: null,
+    evidenceLoading: true,
+    polling: false
+  }));
+  try {
+    const artifacts = await client.listArtifacts(release.id, controller.signal);
+    if (generationRef.current !== generation) return;
+    updateActiveState(setState, release.id, (active) => ({
+      ...active,
+      artifacts,
+      evidenceLoading: false
+    }));
+  } catch (error) {
+    if (generationRef.current === generation && !isAbortError(error)) {
+      updateActiveState(setState, release.id, (active) => ({
+        ...active,
+        evidenceError: error instanceof Error ? error.message : "Evidence unavailable",
+        evidenceLoading: false
+      }));
+    }
+  }
+}
+
+function createActiveState(release: ReleaseSummary): ActiveReleaseState {
+  return {
+    artifacts: [],
+    details: null,
+    evidenceError: null,
+    evidenceLoading: false,
+    pollError: null,
+    polling: true,
+    release,
+    retryError: null,
+    retrying: false,
+    status: "active"
+  };
+}
+
+function updateActiveState(
+  setState: React.Dispatch<React.SetStateAction<ReleaseState>>,
+  releaseId: string,
+  update: (state: ActiveReleaseState) => ActiveReleaseState
+): void {
+  setState((current) => current.status === "active" && current.release.id === releaseId
+    ? update(current)
+    : current);
+}
+
+function delay(durationMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Request aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, durationMs);
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function isUncertainSubmissionError(error: unknown): boolean {
+  return error instanceof TypeError
+    || (error instanceof ReleaseApiError && error.status >= 500);
 }

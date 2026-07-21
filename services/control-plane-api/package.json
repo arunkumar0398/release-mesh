@@ -11,6 +11,7 @@
     "@releasemesh/contracts": "workspace:*",
     "@releasemesh/database": "workspace:*",
     "@releasemesh/runner-worker": "workspace:*",
+    "@fastify/cors": "^11.1.0",
     "fastify": "^5.2.1"
   },
   "devDependencies": {

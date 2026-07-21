@@ -47,39 +47,67 @@ export interface ReleaseArtifact {
 }
 
 export interface ReleaseAppClient {
-  createRelease(candidateVersion: PricingCandidate, idempotencyKey: string): Promise<ReleaseSummary>;
-  getRelease(releaseId: string): Promise<ReleaseDetails>;
-  listArtifacts(releaseId: string): Promise<ReleaseArtifact[]>;
+  createRelease(candidateVersion: PricingCandidate, idempotencyKey: string, signal?: AbortSignal): Promise<ReleaseSummary>;
+  getRelease(releaseId: string, signal?: AbortSignal): Promise<ReleaseDetails>;
+  listArtifacts(releaseId: string, signal?: AbortSignal): Promise<ReleaseArtifact[]>;
+  retryRelease(releaseId: string, signal?: AbortSignal): Promise<ReleaseSummary>;
+}
+
+export class ReleaseApiError extends Error {
+  public constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ReleaseApiError";
+  }
 }
 
 export function createReleaseApiClient(apiBaseUrl = "/api"): ReleaseAppClient {
   const baseUrl = apiBaseUrl.replace(/\/$/, "");
 
   return {
-    createRelease: (candidateVersion, idempotencyKey) => requestJson<ReleaseSummary>(
+    createRelease: (candidateVersion, idempotencyKey, signal) => requestJson<ReleaseSummary>(
       `${baseUrl}/releases`,
       {
         body: JSON.stringify({ candidateVersion }),
         headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
-        method: "POST"
+        method: "POST",
+        ...(signal === undefined ? {} : { signal })
       }
     ),
-    getRelease: (releaseId) => requestJson<ReleaseDetails>(
-      `${baseUrl}/releases/${encodeURIComponent(releaseId)}`
+    getRelease: (releaseId, signal) => requestJson<ReleaseDetails>(
+      `${baseUrl}/releases/${encodeURIComponent(releaseId)}`,
+      signal === undefined ? undefined : { signal }
     ),
-    listArtifacts: (releaseId) => requestJson<ReleaseArtifact[]>(
-      `${baseUrl}/releases/${encodeURIComponent(releaseId)}/artifacts`
+    listArtifacts: (releaseId, signal) => requestJson<ReleaseArtifact[]>(
+      `${baseUrl}/releases/${encodeURIComponent(releaseId)}/artifacts`,
+      signal === undefined ? undefined : { signal }
+    ),
+    retryRelease: (releaseId, signal) => requestJson<ReleaseSummary>(
+      `${baseUrl}/releases/${encodeURIComponent(releaseId)}/retry`,
+      {
+        method: "POST",
+        ...(signal === undefined ? {} : { signal })
+      }
     )
   };
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = init === undefined ? await fetch(url) : await fetch(url, init);
-  const body = await response.json() as unknown;
+  const text = await response.text();
+  const body = parseJson(text, response.headers.get("content-type"));
   if (!response.ok) {
-    throw new Error(readApiMessage(body));
+    throw new ReleaseApiError(readApiMessage(body), response.status);
   }
   return body as T;
+}
+
+function parseJson(text: string, contentType: string | null): unknown {
+  if (text.length === 0 || !contentType?.toLowerCase().includes("application/json")) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 function readApiMessage(body: unknown): string {

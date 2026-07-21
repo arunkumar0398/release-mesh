@@ -15,14 +15,19 @@ afterEach(() => {
 describe("ReleaseMesh Shell", () => {
   it("loads Release at runtime and displays its loaded version", async () => {
     const loadReleaseRemote = vi.fn().mockResolvedValue({
-      ReleaseApp: () => <h2>Federated Release Centre</h2>,
+      ReleaseApp: ({ apiBaseUrl }: { apiBaseUrl?: string }) => (
+        <h2>{`Federated Release Centre via ${apiBaseUrl}`}</h2>
+      ),
+      apiBaseUrl: "https://api.example/",
       releaseMfeVersion: "0.1.0"
     });
 
     render(<App loadReleaseRemote={loadReleaseRemote} />);
 
     expect(screen.getByRole("banner")).toHaveTextContent("ReleaseMesh");
-    expect(await screen.findByRole("heading", { name: "Federated Release Centre" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", {
+      name: "Federated Release Centre via https://api.example/"
+    })).toBeInTheDocument();
     expect(screen.getByText("Release remote 0.1.0")).toBeInTheDocument();
     expect(loadReleaseRemote).toHaveBeenCalledOnce();
   });
@@ -43,6 +48,7 @@ describe("ReleaseMesh Shell", () => {
       ReleaseApp: () => {
         throw new Error("remote render failed");
       },
+      apiBaseUrl: "https://api.example/",
       releaseMfeVersion: "0.1.0"
     });
 

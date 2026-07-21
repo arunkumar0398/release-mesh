@@ -14,8 +14,9 @@ export async function createReleaseAndAwaitGate(
   page: Page,
   candidateVersion: PricingCandidate,
   expectedGate: TerminalGate
-): Promise<void> {
+): Promise<string> {
   await page.getByRole("button", { exact: true, name: `Validate Pricing ${candidateVersion}` }).click();
   const gate = page.getByRole("status", { name: "Deterministic release gate" });
   await expect(gate).toContainText(expectedGate, { timeout: 30_000 });
+  return page.getByText("Release ID").locator("..").locator("code").innerText();
 }
