@@ -1,0 +1,142 @@
+.catalog-app {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 2rem;
+  color: #17211f;
+}
+
+.catalog-hero,
+.component-heading,
+.dependency-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.catalog-hero h2,
+.catalog-hero p,
+.component-heading h4,
+.component-heading p,
+.dependency-card p {
+  margin: 0;
+}
+
+.catalog-hero h2 {
+  margin-block: 0.3rem 0.55rem;
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+}
+
+.catalog-eyebrow,
+.component-kind {
+  color: #1a6a58;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.catalog-count,
+.owner-team,
+.version-chip {
+  border: 1px solid #b8d0c8;
+  border-radius: 999px;
+  padding: 0.4rem 0.7rem;
+  background: #eff8f4;
+  color: #155b4c;
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.catalog-section {
+  margin-top: 2rem;
+}
+
+.component-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.component-card,
+.dependency-card,
+.catalog-alert {
+  border: 1px solid #d2ded9;
+  border-radius: 18px;
+  padding: 1.25rem;
+  background: #fff;
+  box-shadow: 0 12px 30px rgb(16 61 50 / 8%);
+}
+
+.component-heading h4 {
+  margin-top: 0.2rem;
+  font-size: 1.35rem;
+}
+
+.catalog-detail,
+.contract-card {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 1.2rem;
+}
+
+.version-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.contract-card {
+  border-top: 1px solid #e0e8e4;
+  padding-top: 1rem;
+}
+
+.contract-card code,
+.dependency-card code {
+  width: fit-content;
+  border-radius: 7px;
+  padding: 0.25rem 0.4rem;
+  background: #f0f3f1;
+}
+
+.dependency-route {
+  font-size: 1.2rem;
+  font-weight: 850;
+}
+
+.dependency-card dl {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+}
+
+.dependency-card dl div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.dependency-card dt,
+.muted {
+  color: #66726e;
+  font-size: 0.8rem;
+}
+
+.dependency-card dd {
+  margin: 0;
+  font-weight: 750;
+}
+
+@media (max-width: 720px) {
+  .catalog-app {
+    padding: 1rem;
+  }
+
+  .catalog-hero,
+  .dependency-card {
+    flex-direction: column;
+  }
+
+  .component-grid {
+    grid-template-columns: 1fr;
+  }
+}

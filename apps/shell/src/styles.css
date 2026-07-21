@@ -46,7 +46,16 @@ body {
   font-size: 0.8rem;
 }
 
+.remote-versions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 nav {
+  display: flex;
+  gap: 1.25rem;
   padding: 0.75rem 2rem;
   border-bottom: 1px solid #cbd7ce;
   background: white;
@@ -73,6 +82,10 @@ nav a {
     align-items: flex-start;
     flex-direction: column;
     padding: 1rem;
+  }
+
+  .remote-versions {
+    justify-content: flex-start;
   }
 
   nav {

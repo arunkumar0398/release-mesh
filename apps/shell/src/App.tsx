@@ -1,32 +1,84 @@
-import { Component, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 
+import { RemoteBoundary } from "./RemoteBoundary.js";
 import {
+  loadCatalogRemote as loadRuntimeCatalogRemote,
   loadReleaseRemote as loadRuntimeReleaseRemote,
+  type CatalogRemoteModule,
   type ReleaseRemoteModule
 } from "./runtime-remotes.js";
 import "./styles.css";
 
 export interface AppProps {
+  loadCatalogRemote?: () => Promise<CatalogRemoteModule>;
   loadReleaseRemote?: () => Promise<ReleaseRemoteModule>;
 }
 
-type RemoteState =
+type RemoteState<RemoteModule> =
   | { status: "loading" }
   | { message: string; status: "error" }
-  | { remote: ReleaseRemoteModule; status: "ready" };
+  | { remote: RemoteModule; status: "ready" };
 
-export function App({ loadReleaseRemote = loadRuntimeReleaseRemote }: AppProps): React.JSX.Element {
-  const [remoteState, setRemoteState] = useState<RemoteState>({ status: "loading" });
+export function App({
+  loadCatalogRemote = loadRuntimeCatalogRemote,
+  loadReleaseRemote = loadRuntimeReleaseRemote
+}: AppProps): React.JSX.Element {
+  const catalogState = useRemote(loadCatalogRemote);
+  const releaseState = useRemote(loadReleaseRemote);
+
+  return (
+    <div className="shell-layout">
+      <header className="shell-header" role="banner">
+        <div>
+          <p className="shell-eyebrow">Release assurance control plane</p>
+          <h1>ReleaseMesh</h1>
+        </div>
+        <div aria-label="Loaded remote versions" className="remote-versions">
+          {catalogState.status === "ready" ? (
+            <span className="remote-version">Catalog remote {catalogState.remote.catalogMfeVersion}</span>
+          ) : null}
+          {releaseState.status === "ready" ? (
+            <span className="remote-version">Release remote {releaseState.remote.releaseMfeVersion}</span>
+          ) : null}
+        </div>
+      </header>
+      <nav aria-label="Primary navigation">
+        <a href="#catalog">Service Catalogue</a>
+        <a href="#release">Release Centre</a>
+      </nav>
+      <RemoteSlot label="Catalog" state={catalogState}>
+        {catalogState.status === "ready" ? (
+          <RemoteBoundary remoteName="Catalog">
+            <catalogState.remote.CatalogApp apiBaseUrl={catalogState.remote.apiBaseUrl} />
+          </RemoteBoundary>
+        ) : null}
+      </RemoteSlot>
+      <RemoteSlot label="Release" state={releaseState}>
+        {releaseState.status === "ready" ? (
+          <RemoteBoundary remoteName="Release">
+            <releaseState.remote.ReleaseApp apiBaseUrl={releaseState.remote.apiBaseUrl} />
+          </RemoteBoundary>
+        ) : null}
+      </RemoteSlot>
+    </div>
+  );
+}
+
+function useRemote<RemoteModule>(
+  loadRemote: () => Promise<RemoteModule>
+): RemoteState<RemoteModule> {
+  const [state, setState] = useState<RemoteState<RemoteModule>>({ status: "loading" });
 
   useEffect(() => {
     let active = true;
-    void loadReleaseRemote().then(
+    setState({ status: "loading" });
+    void loadRemote().then(
       (remote) => {
-        if (active) setRemoteState({ remote, status: "ready" });
+        if (active) setState({ remote, status: "ready" });
       },
       (error: unknown) => {
         if (active) {
-          setRemoteState({
+          setState({
             message: error instanceof Error ? error.message : "Unknown remote loading failure",
             status: "error"
           });
@@ -36,56 +88,34 @@ export function App({ loadReleaseRemote = loadRuntimeReleaseRemote }: AppProps):
     return () => {
       active = false;
     };
-  }, [loadReleaseRemote]);
+  }, [loadRemote]);
 
-  return (
-    <div className="shell-layout">
-      <header className="shell-header" role="banner">
-        <div>
-          <p className="shell-eyebrow">Release assurance control plane</p>
-          <h1>ReleaseMesh</h1>
-        </div>
-        {remoteState.status === "ready" ? (
-          <span className="remote-version">Release remote {remoteState.remote.releaseMfeVersion}</span>
-        ) : null}
-      </header>
-      <nav aria-label="Primary navigation">
-        <a aria-current="page" href="#release">Release Centre</a>
-      </nav>
-      <section aria-label="Release remote" className="remote-slot" id="release">
-        {remoteState.status === "loading" ? <p role="status">Loading Release remote…</p> : null}
-        {remoteState.status === "error" ? (
-          <div role="alert">
-            <h2>Release remote unavailable</h2>
-            <p>{remoteState.message}</p>
-          </div>
-        ) : null}
-        {remoteState.status === "ready" ? (
-          <RemoteErrorBoundary>
-            <remoteState.remote.ReleaseApp apiBaseUrl={remoteState.remote.apiBaseUrl} />
-          </RemoteErrorBoundary>
-        ) : null}
-      </section>
-    </div>
-  );
+  return state;
 }
 
-class RemoteErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  public state = { failed: false };
-
-  public static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true };
-  }
-
-  public render(): ReactNode {
-    if (this.state.failed) {
-      return (
+function RemoteSlot<RemoteModule>({
+  children,
+  label,
+  state
+}: {
+  children: React.ReactNode;
+  label: "Catalog" | "Release";
+  state: RemoteState<RemoteModule>;
+}): React.JSX.Element {
+  return (
+    <section
+      aria-label={`${label} remote`}
+      className="remote-slot"
+      id={label.toLowerCase()}
+    >
+      {state.status === "loading" ? <p role="status">Loading {label} remote…</p> : null}
+      {state.status === "error" ? (
         <div role="alert">
-          <h2>Release remote failed to render</h2>
-          <p>The Shell remains available. Reload after the remote is healthy.</p>
+          <h2>{label} remote unavailable</h2>
+          <p>{state.message}</p>
         </div>
-      );
-    }
-    return this.props.children;
-  }
+      ) : null}
+      {children}
+    </section>
+  );
 }
