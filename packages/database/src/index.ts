@@ -6,4 +6,5 @@ export * from "./repositories/release-repository.js";
 export * from "./repositories/risk-assessment-repository.js";
 export * from "./repositories/test-run-repository.js";
 export * from "./repositories/worker-heartbeat-repository.js";
+export * from "./reset-demo.js";
 export * from "./seed.js";

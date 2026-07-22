@@ -5,6 +5,7 @@ import {
   createPrismaClient,
   IdempotencyConflictError,
   ReleaseRepository,
+  resetDemo,
   WorkerHeartbeatRepository
 } from "@releasemesh/database";
 import { createReleaseQueue } from "@releasemesh/runner-worker/queue";
@@ -12,6 +13,7 @@ import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { HealthService } from "./health-service.js";
+import { DemoResetBusyError, DemoResetService } from "./demo-reset-service.js";
 import {
   ReleaseNotFoundError,
   ReleaseOrchestrator,
@@ -26,23 +28,29 @@ import {
   registerDependencyRoutes,
   type DependencyRoutesDependencies
 } from "./routes/dependencies.js";
+import {
+  registerDemoResetRoutes,
+  type DemoResetRoutesDependencies
+} from "./routes/demo-reset.js";
 import { registerHealthRoutes, type HealthRoutesDependencies } from "./routes/healthz.js";
 import { registerReleaseRoutes, type ReleaseRoutesDependencies } from "./routes/releases.js";
 
 export interface ControlPlaneDependencies {
   catalog: ComponentRoutesDependencies & DependencyRoutesDependencies;
+  demoReset?: DemoResetRoutesDependencies;
   health: HealthRoutesDependencies;
   releases: ReleaseRoutesDependencies;
 }
 
 export interface ControlPlaneServerOptions {
   allowedOrigins?: string[];
+  demoResetToken?: string;
 }
 
 export function buildControlPlaneServer(
   dependencies: ControlPlaneDependencies,
   logger = false,
-  { allowedOrigins = [] }: ControlPlaneServerOptions = {}
+  { allowedOrigins = [], demoResetToken }: ControlPlaneServerOptions = {}
 ): FastifyInstance {
   const server = Fastify({ logger });
   if (allowedOrigins.length > 0) {
@@ -64,6 +72,9 @@ export function buildControlPlaneServer(
     if (error instanceof ReleaseRetryConflictError) {
       return reply.code(409).send({ message: error.message });
     }
+    if (error instanceof DemoResetBusyError) {
+      return reply.code(409).send({ message: error.message });
+    }
     if (isValidationError(error)) {
       return reply.code(error.statusCode ?? 400).send({ message: error.message });
     }
@@ -72,6 +83,9 @@ export function buildControlPlaneServer(
   });
   registerComponentRoutes(server, dependencies.catalog);
   registerDependencyRoutes(server, dependencies.catalog);
+  if (dependencies.demoReset && demoResetToken) {
+    registerDemoResetRoutes(server, dependencies.demoReset, demoResetToken);
+  }
   registerReleaseRoutes(server, dependencies.releases);
   registerHealthRoutes(server, dependencies.health);
   return server;
@@ -105,15 +119,23 @@ export async function startControlPlaneServer() {
     }
   });
   const releases = new ReleaseOrchestrator({ catalogRepository, queue, releaseRepository });
+  const demoReset = new DemoResetService({
+    queue: queue.raw,
+    resetDatabase: () => resetDemo(prisma)
+  });
   const server = buildControlPlaneServer({
     catalog: {
       getComponent: (componentId) => catalogRepository.findComponentById(componentId),
       listComponents: () => catalogRepository.listComponents(),
       listDependencies: () => catalogRepository.listDependencies()
     },
+    demoReset,
     health,
     releases
-  }, true, { allowedOrigins: readAllowedOrigins(process.env.CONTROL_PLANE_ALLOWED_ORIGINS) });
+  }, true, {
+    allowedOrigins: readAllowedOrigins(process.env.CONTROL_PLANE_ALLOWED_ORIGINS),
+    demoResetToken: requiredEnvironment("DEMO_RESET_TOKEN")
+  });
   await server.listen({ host: "0.0.0.0", port });
 
   return {

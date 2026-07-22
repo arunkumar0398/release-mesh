@@ -1,5 +1,7 @@
 import { buildDeterministicErrorAssessment } from "./deterministic-error-assessment.js";
 
+export { startWorkerHeartbeat } from "./heartbeat.js";
+
 export function cappedExponentialBackoff(attemptsMade: number): number {
   return Math.min(1_000 * 2 ** Math.max(0, attemptsMade - 1), 30_000);
 }
@@ -67,37 +69,4 @@ export async function runRecoveryTasks(tasks: Array<() => Promise<unknown>>): Pr
     .filter((result): result is PromiseRejectedResult => result.status === "rejected")
     .map((result) => result.reason);
   if (failures.length > 0) throw new AggregateError(failures, "Recovery sweep failed");
-}
-
-export function startWorkerHeartbeat({
-  heartbeatRepository,
-  intervalMs,
-  onError = (error: Error) => console.error(error),
-  workerId
-}: {
-  heartbeatRepository: { record(workerId: string, seenAt: Date): Promise<void> };
-  intervalMs: number;
-  onError?: (error: Error) => void;
-  workerId: string;
-}): { ready: Promise<void>; stop(): Promise<void> } {
-  let pending = Promise.resolve();
-  const record = () => {
-    pending = pending.then(() => heartbeatRepository.record(workerId, new Date())).catch((error: unknown) => {
-      onError(error instanceof Error ? error : new Error("Worker heartbeat failed"));
-    });
-    return pending;
-  };
-  const ready = record();
-  const interval = setInterval(() => {
-    void record();
-  }, intervalMs);
-  interval.unref?.();
-
-  return {
-    ready,
-    stop: async () => {
-      clearInterval(interval);
-      await pending;
-    }
-  };
 }

@@ -77,7 +77,9 @@ export class ReleaseApiError extends Error {
   }
 }
 
-export function createReleaseApiClient(apiBaseUrl = "/api"): ReleaseAppClient {
+export function createReleaseApiClient(
+  apiBaseUrl = import.meta.env.VITE_CONTROL_PLANE_API_URL || "/api"
+): ReleaseAppClient {
   const baseUrl = apiBaseUrl.replace(/\/$/, "");
 
   return {

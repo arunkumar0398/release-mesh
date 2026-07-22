@@ -26,7 +26,7 @@ describe("HealthService", () => {
   it.each([
     ["missing", null],
     ["stale", { seenAt: new Date("2026-07-21T09:59:00.000Z") }]
-  ])("degrades when the worker heartbeat is %s", async (_scenario, heartbeat) => {
+  ])("reports a %s worker heartbeat without degrading healthy dependencies", async (_scenario, heartbeat) => {
     const service = new HealthService({
       clock: () => new Date("2026-07-21T10:00:00.000Z"),
       databaseCheck: vi.fn().mockResolvedValue(undefined),
@@ -36,7 +36,9 @@ describe("HealthService", () => {
     });
 
     await expect(service.getHealth()).resolves.toMatchObject({
-      status: "degraded",
+      database: "up",
+      redis: "up",
+      status: "ok",
       worker: { fresh: false }
     });
   });

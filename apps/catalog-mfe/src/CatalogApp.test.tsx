@@ -11,6 +11,7 @@ import { CatalogApp } from "./CatalogApp.js";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 const snapshot: CatalogSnapshot = {
@@ -74,6 +75,16 @@ describe("CatalogApp", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Catalogue data unavailable");
     expect(screen.getByRole("alert")).toHaveTextContent("catalogue unavailable");
+  });
+
+  it("uses the build-time API URL when opened as a standalone static site", async () => {
+    vi.stubEnv("VITE_CONTROL_PLANE_API_URL", "https://api.example");
+    const loadSnapshot = vi.fn().mockResolvedValue(snapshot);
+
+    render(<CatalogApp loadSnapshot={loadSnapshot} />);
+
+    expect(await screen.findByRole("heading", { name: "Checkout" })).toBeInTheDocument();
+    expect(loadSnapshot).toHaveBeenCalledWith("https://api.example");
   });
 });
 

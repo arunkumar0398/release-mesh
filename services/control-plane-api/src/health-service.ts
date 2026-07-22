@@ -28,7 +28,7 @@ export class HealthService {
     return {
       database: databaseStatus,
       redis: redisStatus,
-      status: databaseStatus === "up" && redisStatus === "up" && fresh ? "ok" : "degraded",
+      status: databaseStatus === "up" && redisStatus === "up" ? "ok" : "degraded",
       worker: {
         fresh,
         lastSeenAt: latest?.seenAt.toISOString() ?? null

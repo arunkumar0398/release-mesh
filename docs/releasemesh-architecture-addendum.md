@@ -29,8 +29,8 @@ After Build Week, `packages/risk-engine` may be extracted behind the same valida
 
 Both artifact implementations satisfy the `ArtifactStore` contract.
 
-* `LocalArtifactStore` supports isolated local development and contract testing without exposing filesystem paths to callers.
-* The integrated Docker Compose stack and hosted Render runtime use `PostgresArtifactStore` so the API and worker share durable JSON evidence, sanitized logs, and bounded demo screenshots without a shared filesystem.
+* Docker Compose selects `LocalArtifactStore`. It writes a disposable worker-local copy while persisting sanitized metadata and content in PostgreSQL, so the API never depends on a shared or persistent local filesystem.
+* Render selects `PostgresArtifactStore` for durable JSON evidence, sanitized logs, and bounded demo screenshots.
 * GPT-5.6 receives structured sanitized evidence and screenshot metadata, never screenshot bytes or raw unsanitized logs.
 
 These modes keep the API and worker independent of a shared or persistent local filesystem.

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createReleaseApiClient, ReleaseApiError } from "./api.js";
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
@@ -64,6 +65,21 @@ describe("release API client", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/releases/release-1", { signal });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/releases/release-1/artifacts", { signal });
+  });
+
+  it("uses the build-time API URL when opened as a standalone static site", async () => {
+    vi.stubEnv("VITE_CONTROL_PLANE_API_URL", "https://api.example");
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      attempt: 0,
+      candidateVersion: "v2",
+      id: "release-1",
+      status: "QUEUED"
+    }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createReleaseApiClient().createRelease("v2", "standalone");
+
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example/releases", expect.any(Object));
   });
 });
 

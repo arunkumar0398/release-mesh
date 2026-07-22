@@ -5,8 +5,9 @@ import type {
   StoredArtifact
 } from "@releasemesh/contracts";
 
-import { ArtifactStorageKind, Prisma, PrismaClient } from "../generated/prisma/client.js";
+import { ArtifactStorageKind, PrismaClient } from "../generated/prisma/client.js";
 import { normalizeArtifact } from "./artifact-policy.js";
+import { toDatabaseArtifactPayload } from "./database-artifact-payload.js";
 
 export class PostgresArtifactStore implements ArtifactStore {
   public constructor(private readonly prisma: PrismaClient) {}
@@ -41,7 +42,7 @@ export class PostgresArtifactStore implements ArtifactStore {
         throw new Error("Test run does not belong to the release");
       }
     }
-    const payload = toDatabasePayload(input, normalized);
+    const payload = toDatabaseArtifactPayload(input, normalized);
     const artifact = await this.prisma.evidenceArtifact.create({
       data: {
         binaryContent: payload.binaryContent,
@@ -65,33 +66,4 @@ export class PostgresArtifactStore implements ArtifactStore {
       testRunId: artifact.testRunId ?? undefined
     };
   }
-}
-
-function toDatabasePayload(input: ArtifactInput, normalized: ReturnType<typeof normalizeArtifact>) {
-  if (typeof normalized.content !== "string") {
-    return {
-      binaryContent: Uint8Array.from(normalized.content),
-      jsonContent: undefined,
-      sizeBytes: normalized.sizeBytes,
-      textContent: undefined
-    };
-  }
-
-  if (input.contentType === "application/json") {
-    const jsonContent = JSON.parse(normalized.content);
-
-    return {
-      binaryContent: undefined,
-      jsonContent: jsonContent === null ? Prisma.JsonNull : (jsonContent as Prisma.InputJsonValue),
-      sizeBytes: normalized.sizeBytes,
-      textContent: undefined
-    };
-  }
-
-  return {
-    binaryContent: undefined,
-    jsonContent: undefined,
-    sizeBytes: normalized.sizeBytes,
-    textContent: normalized.content
-  };
 }

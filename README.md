@@ -8,7 +8,7 @@ The approved source of truth is [`docs/releasemesh-architecture.md`](docs/releas
 
 * `apps/shell` - Module Federation shell and remote boundary.
 * `apps/release-mfe` - release creation, lifecycle, deterministic evidence, and advisory risk report.
-* `apps/catalog-mfe` - catalogue remote reserved for the approved M6 milestone.
+* `apps/catalog-mfe` - seeded component, contract, ownership, and dependency catalogue remote.
 * `services/control-plane-api` - catalogue and release lifecycle APIs.
 * `services/runner-worker` - BullMQ worker, trusted checks, artifact collection, and heartbeat; no public HTTP listener.
 * `packages/contracts` - deterministic lifecycle, gate, contract diff, and artifact contracts.
@@ -34,6 +34,8 @@ corepack pnpm dev
 
 Open `http://127.0.0.1:4174`, validate Pricing v2 for `BLOCKED`, then validate Pricing v2.1 for `SAFE`.
 
+Docker Compose selects `LocalArtifactStore` with a disposable worker-local copy and durable PostgreSQL metadata/content, so the API does not depend on the worker filesystem. Reset the idle local demo with `corepack pnpm demo:reset` after setting `DATABASE_URL`.
+
 ## GPT-5.6
 
 GPT credentials are server-side worker configuration only. Never put `OPENAI_API_KEY` in Shell, Release MFE, or Checkout environment variables.
@@ -56,6 +58,14 @@ corepack pnpm test:e2e
 ```
 
 Database integration tests require a PostgreSQL database whose name ends in `_test` via `TEST_DATABASE_URL`.
+
+## Public Demo
+
+The Render Blueprint deploys Shell, Catalog, Release, and Checkout as a Render static site each; API and Pricing remain web services; and the runner is a paid background worker with no public listener. Hosted Render Postgres and Key Value provide runtime state, while Render uses `PostgresArtifactStore` for evidence.
+
+Expected Shell URL: `https://arunkumar0398-releasemesh-shell.onrender.com`
+
+Deployment, reset, health, header, repository-access, and video instructions are in [`docs/deployment.md`](docs/deployment.md), [`docs/demo-runbook.md`](docs/demo-runbook.md), and [`docs/submission.md`](docs/submission.md). `OPENAI_API_KEY` is configured only on the runner.
 
 ## Codex Workflow
 

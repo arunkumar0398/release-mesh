@@ -1,7 +1,12 @@
-import { PrismaClient } from "./generated/prisma/client.js";
+import { pathToFileURL } from "node:url";
+
+import { Prisma, PrismaClient } from "./generated/prisma/client.js";
 
 export async function seedCatalog(prisma: PrismaClient): Promise<void> {
-  await prisma.$transaction(async (transaction) => {
+  await prisma.$transaction(seedCatalogData);
+}
+
+export async function seedCatalogData(transaction: Prisma.TransactionClient): Promise<void> {
     const checkout = await transaction.component.upsert({
       create: { kind: "FRONTEND", name: "checkout", ownerTeam: "checkout-platform" },
       update: { kind: "FRONTEND", ownerTeam: "checkout-platform" },
@@ -51,7 +56,6 @@ export async function seedCatalog(prisma: PrismaClient): Promise<void> {
       },
       where: { consumerId_providerId: { consumerId: checkout.id, providerId: pricing.id } }
     });
-  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -59,4 +63,3 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   await seedCatalog(prisma);
   await prisma.$disconnect();
 }
-import { pathToFileURL } from "node:url";

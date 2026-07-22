@@ -1,0 +1,164 @@
+services:
+  - type: web
+    runtime: static
+    name: arunkumar0398-releasemesh-shell
+    buildCommand: corepack enable && corepack pnpm install --frozen-lockfile && corepack pnpm --filter @releasemesh/shell build && cp apps/shell/render-remotes.json apps/shell/dist/remotes.json
+    staticPublishPath: ./apps/shell/dist
+    autoDeployTrigger: commit
+    headers:
+      - path: /remotes.json
+        name: Cache-Control
+        value: no-store
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+
+  - type: web
+    runtime: static
+    name: arunkumar0398-releasemesh-catalog
+    buildCommand: corepack enable && corepack pnpm install --frozen-lockfile && corepack pnpm --filter @releasemesh/catalog-mfe build
+    staticPublishPath: ./apps/catalog-mfe/dist
+    autoDeployTrigger: commit
+    envVars:
+      - key: CATALOG_MFE_ORIGIN
+        value: https://arunkumar0398-releasemesh-catalog.onrender.com
+      - key: VITE_CONTROL_PLANE_API_URL
+        value: https://arunkumar0398-releasemesh-api.onrender.com
+    headers:
+      - path: /mf-manifest.json
+        name: Cache-Control
+        value: no-store
+      - path: /remoteEntry.js
+        name: Cache-Control
+        value: no-store
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /*
+        name: Access-Control-Allow-Origin
+        value: https://arunkumar0398-releasemesh-shell.onrender.com
+
+  - type: web
+    runtime: static
+    name: arunkumar0398-releasemesh-release
+    buildCommand: corepack enable && corepack pnpm install --frozen-lockfile && corepack pnpm --filter @releasemesh/release-mfe build
+    staticPublishPath: ./apps/release-mfe/dist
+    autoDeployTrigger: commit
+    envVars:
+      - key: RELEASE_MFE_ORIGIN
+        value: https://arunkumar0398-releasemesh-release.onrender.com
+      - key: VITE_CONTROL_PLANE_API_URL
+        value: https://arunkumar0398-releasemesh-api.onrender.com
+    headers:
+      - path: /mf-manifest.json
+        name: Cache-Control
+        value: no-store
+      - path: /remoteEntry.js
+        name: Cache-Control
+        value: no-store
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /*
+        name: Access-Control-Allow-Origin
+        value: https://arunkumar0398-releasemesh-shell.onrender.com
+
+  - type: web
+    runtime: static
+    name: arunkumar0398-releasemesh-checkout
+    buildCommand: corepack enable && corepack pnpm install --frozen-lockfile && corepack pnpm --filter @releasemesh/checkout build
+    staticPublishPath: ./fixtures/checkout/dist
+    autoDeployTrigger: commit
+    envVars:
+      - key: VITE_PRICING_BASE_URL
+        value: https://arunkumar0398-releasemesh-pricing.onrender.com
+    headers:
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+
+  - type: web
+    runtime: docker
+    name: arunkumar0398-releasemesh-api
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerCommand: /bin/sh -c "corepack pnpm --filter @releasemesh/database generate && corepack pnpm --filter @releasemesh/database migrate:deploy && corepack pnpm --filter @releasemesh/database seed && corepack pnpm --filter @releasemesh/control-plane-api start"
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: arunkumar0398-releasemesh-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: arunkumar0398-releasemesh-redis
+          property: connectionString
+      - key: CONTROL_PLANE_ALLOWED_ORIGINS
+        value: https://arunkumar0398-releasemesh-shell.onrender.com,https://arunkumar0398-releasemesh-catalog.onrender.com,https://arunkumar0398-releasemesh-release.onrender.com,https://arunkumar0398-releasemesh-checkout.onrender.com
+      - key: DEMO_RESET_TOKEN
+        sync: false
+      - key: WORKER_HEARTBEAT_TTL_MS
+        value: "30000"
+
+  - type: web
+    runtime: docker
+    name: arunkumar0398-releasemesh-pricing
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerCommand: corepack pnpm --filter @releasemesh/pricing start
+    healthCheckPath: /pricing/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PRICING_MODE
+        value: v1
+
+  - type: worker
+    runtime: docker
+    name: arunkumar0398-releasemesh-runner
+    plan: starter
+    dockerfilePath: ./Dockerfile.worker
+    dockerCommand: /bin/sh -c "corepack pnpm --filter @releasemesh/database generate && corepack pnpm --filter @releasemesh/runner-worker start"
+    autoDeployTrigger: commit
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: arunkumar0398-releasemesh-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: arunkumar0398-releasemesh-redis
+          property: connectionString
+      - key: ARTIFACT_STORE
+        value: postgres
+      - key: CHECKOUT_BASE_URL
+        value: https://arunkumar0398-releasemesh-checkout.onrender.com
+      - key: PRICING_BASE_URL
+        value: https://arunkumar0398-releasemesh-pricing.onrender.com
+      - key: TRUSTED_CHECKOUT_ORIGINS
+        value: https://arunkumar0398-releasemesh-checkout.onrender.com
+      - key: TRUSTED_PRICING_ORIGINS
+        value: https://arunkumar0398-releasemesh-pricing.onrender.com
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.6
+      - key: OPENAI_TIMEOUT_MS
+        value: "8000"
+      - key: WORKER_HEARTBEAT_INTERVAL_MS
+        value: "10000"
+
+  - type: keyvalue
+    name: arunkumar0398-releasemesh-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+databases:
+  - name: arunkumar0398-releasemesh-db
+    plan: free
+    databaseName: releasemesh
+    user: releasemesh
+    ipAllowList: []
