@@ -15,6 +15,7 @@
   "scripts": {
     "build": "corepack pnpm generate:prisma && corepack pnpm -r --if-present build",
     "demo:ai-smoke": "corepack pnpm --filter @releasemesh/risk-engine ai-smoke",
+    "demo:reset": "corepack pnpm --filter @releasemesh/database reset:demo",
     "dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build",
     "generate:prisma": "corepack pnpm --filter @releasemesh/database generate",
     "lint": "eslint .",
@@ -34,6 +35,7 @@
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.20.0",
     "vite": "^7.0.0",
-    "vitest": "^3.0.4"
+    "vitest": "^3.0.4",
+    "yaml": "2.9.0"
   }
 }

@@ -15,7 +15,7 @@ type CheckoutState =
 
 export function App({
   candidateVersion,
-  pricingBaseUrl = "http://127.0.0.1:4100",
+  pricingBaseUrl = import.meta.env.VITE_PRICING_BASE_URL || "http://127.0.0.1:4100",
   productId = "checkout-demo"
 }: AppProps): React.JSX.Element {
   const [state, setState] = useState<CheckoutState>({ status: "loading" });

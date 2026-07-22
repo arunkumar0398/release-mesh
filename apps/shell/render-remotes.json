@@ -1,0 +1,10 @@
+{
+  "catalog": {
+    "apiBaseUrl": "https://arunkumar0398-releasemesh-api.onrender.com",
+    "manifestUrl": "https://arunkumar0398-releasemesh-catalog.onrender.com/mf-manifest.json"
+  },
+  "release": {
+    "apiBaseUrl": "https://arunkumar0398-releasemesh-api.onrender.com",
+    "manifestUrl": "https://arunkumar0398-releasemesh-release.onrender.com/mf-manifest.json"
+  }
+}

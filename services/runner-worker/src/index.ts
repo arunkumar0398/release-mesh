@@ -3,7 +3,6 @@ import { pathToFileURL } from "node:url";
 
 import {
   createPrismaClient,
-  PostgresArtifactStore,
   ReleaseRepository,
   RiskAssessmentRepository,
   TestRunRepository,
@@ -16,9 +15,11 @@ import {
 } from "@releasemesh/risk-engine";
 import { Worker, type Job } from "bullmq";
 
+import { createRunnerArtifactStore } from "./artifact-store.js";
 import { createPricingApiCheck } from "./checks/api-check.js";
 import { createCheckoutBrowserCheck } from "./checks/browser-check.js";
 import { buildDeterministicErrorAssessment } from "./deterministic-error-assessment.js";
+import { startWorkerHeartbeat } from "./heartbeat.js";
 import { DefaultMandatoryCheckExecutor } from "./mandatory-check-executor.js";
 import type { ReleaseProcessor } from "./release-processor.js";
 import {
@@ -28,8 +29,7 @@ import {
 import {
   cappedExponentialBackoff,
   recoverStrandedTestingReleases,
-  runRecoveryTasks,
-  startWorkerHeartbeat
+  runRecoveryTasks
 } from "./recovery.js";
 import {
   createReleaseQueue,
@@ -148,7 +148,11 @@ export async function startRunnerRuntime() {
   await recoverySweep.ready;
 
   const processor = new DefaultReleaseProcessor({
-    artifactStore: new PostgresArtifactStore(prisma),
+    artifactStore: createRunnerArtifactStore({
+      artifactDirectory: process.env.ARTIFACT_DIRECTORY,
+      mode: process.env.ARTIFACT_STORE?.trim() || "postgres",
+      prisma
+    }),
     mandatoryCheckExecutor: new DefaultMandatoryCheckExecutor({
       runBrowserCheck: createCheckoutBrowserCheck({
         checkoutBaseUrl,
@@ -204,5 +208,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 
 export * from "./queues/release-queue.js";
+export * from "./artifact-store.js";
+export * from "./heartbeat.js";
 export * from "./recovery.js";
 export * from "./release-processor.js";

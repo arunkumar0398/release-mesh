@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -8,7 +8,9 @@ import type {
   RetrievedArtifact,
   StoredArtifact
 } from "@releasemesh/contracts";
+import { ArtifactStorageKind, type PrismaClient } from "../generated/prisma/client.js";
 import { normalizeArtifact } from "./artifact-policy.js";
+import { toDatabaseArtifactPayload } from "./database-artifact-payload.js";
 
 interface LocalArtifactMetadata extends StoredArtifact {
   contentEncoding: "binary" | "utf8";
@@ -16,7 +18,13 @@ interface LocalArtifactMetadata extends StoredArtifact {
 }
 
 export class LocalArtifactStore implements ArtifactStore {
-  public constructor(private readonly rootDirectory: string) {}
+  private readonly prisma: PrismaClient | undefined;
+  private readonly rootDirectory: string;
+
+  public constructor(options: string | { prisma: PrismaClient; rootDirectory: string }) {
+    this.rootDirectory = typeof options === "string" ? options : options.rootDirectory;
+    this.prisma = typeof options === "string" ? undefined : options.prisma;
+  }
 
   public async get(id: string): Promise<RetrievedArtifact | null> {
     if (!isArtifactId(id)) {
@@ -58,9 +66,44 @@ export class LocalArtifactStore implements ArtifactStore {
       testRunId: input.testRunId
     };
 
+    if (this.prisma && input.testRunId) {
+      const testRun = await this.prisma.testRun.findFirst({
+        where: { id: input.testRunId, releaseId: input.releaseId }
+      });
+      if (!testRun) throw new Error("Test run does not belong to the release");
+    }
+
     await mkdir(this.rootDirectory, { recursive: true });
-    await writeFile(join(this.rootDirectory, metadata.contentPath), content);
-    await writeFile(join(this.rootDirectory, `${id}.metadata.json`), JSON.stringify(metadata));
+    const contentPath = join(this.rootDirectory, metadata.contentPath);
+    const metadataPath = join(this.rootDirectory, `${id}.metadata.json`);
+    try {
+      await writeFile(contentPath, content);
+      await writeFile(metadataPath, JSON.stringify(metadata));
+      if (this.prisma) {
+        const payload = toDatabaseArtifactPayload(input, normalized);
+        await this.prisma.evidenceArtifact.create({
+          data: {
+            binaryContent: payload.binaryContent,
+            contentType: input.contentType,
+            id,
+            jsonContent: payload.jsonContent,
+            kind: input.kind,
+            localPath: metadata.contentPath,
+            releaseId: input.releaseId,
+            sizeBytes: payload.sizeBytes,
+            storageKind: ArtifactStorageKind.LOCAL,
+            testRunId: input.testRunId,
+            textContent: payload.textContent
+          }
+        });
+      }
+    } catch (error) {
+      await Promise.all([
+        rm(contentPath, { force: true }),
+        rm(metadataPath, { force: true })
+      ]);
+      throw error;
+    }
 
     return toStoredArtifact(metadata);
   }

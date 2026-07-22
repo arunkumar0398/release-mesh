@@ -9,6 +9,7 @@ import { App } from "./App.js";
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
@@ -66,6 +67,19 @@ describe("Checkout", () => {
     expect(await screen.findByText("INR 1299")).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith(
       "http://pricing.test/pricing/checkout-demo?candidateVersion=v2.1",
+      undefined
+    );
+  });
+
+  it("uses the build-time Pricing URL for the deployed static site", async () => {
+    vi.stubEnv("VITE_PRICING_BASE_URL", "https://pricing.example");
+    respondWith({ currency: "INR", price: 1299 });
+
+    render(<App />);
+
+    expect(await screen.findByText("INR 1299")).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      "https://pricing.example/pricing/checkout-demo",
       undefined
     );
   });

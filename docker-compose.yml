@@ -73,6 +73,7 @@ services:
       corepack pnpm --filter @releasemesh/control-plane-api start"
     environment:
       DATABASE_URL: postgresql://releasemesh:releasemesh@postgres:5432/releasemesh
+      DEMO_RESET_TOKEN: ${DEMO_RESET_TOKEN:-local-demo-reset}
       PORT: "4000"
       REDIS_URL: redis://redis:6379
     depends_on:
@@ -96,6 +97,8 @@ services:
       sh -c "corepack pnpm --filter @releasemesh/database generate &&
       corepack pnpm --filter @releasemesh/runner-worker start"
     environment:
+      ARTIFACT_DIRECTORY: /artifacts
+      ARTIFACT_STORE: local
       CHECKOUT_BASE_URL: http://checkout:4173
       DATABASE_URL: postgresql://releasemesh:releasemesh@postgres:5432/releasemesh
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -105,6 +108,8 @@ services:
       REDIS_URL: redis://redis:6379
       TRUSTED_CHECKOUT_ORIGINS: http://checkout:4173
       TRUSTED_PRICING_ORIGINS: http://pricing:4100
+    tmpfs:
+      - /artifacts
     depends_on:
       api:
         condition: service_healthy

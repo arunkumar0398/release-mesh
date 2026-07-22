@@ -16,7 +16,7 @@ type CatalogState =
   | { snapshot: CatalogSnapshot; status: "ready" };
 
 export function CatalogApp({
-  apiBaseUrl = "/api",
+  apiBaseUrl = import.meta.env.VITE_CONTROL_PLANE_API_URL || "/api",
   loadSnapshot = loadCatalog
 }: CatalogAppProps): React.JSX.Element {
   const [state, setState] = useState<CatalogState>({ status: "loading" });
